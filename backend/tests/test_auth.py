@@ -81,7 +81,9 @@ async def test_logout(client):
 
 @pytest.mark.asyncio
 async def test_protected_endpoint_without_auth(client):
-    response = await client.get("/api/admin/items")
+    # Re-pointed from /api/admin/items (removed with the Item slice) to
+    # /api/admin/suppliers, an admin-only endpoint that exists here.
+    response = await client.get("/api/admin/suppliers")
     assert response.status_code == 401
 
 
