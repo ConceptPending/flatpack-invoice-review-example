@@ -47,9 +47,13 @@ user-facing artifact for now.
    (with the agent's help) into Python.
 
 3. **The verifier closes the loop.** `make verify-promotion` reads
-   the manifest in `reference/original-flatpack.html` and asserts each
-   `MANIFEST-ASSERTED` claim still holds in the live FastAPI app. As
-   of the most recent push it reports **10 OK, 0 miss, 0 warn**.
+   the manifest in `reference/original-flatpack.html` plus
+   `reference/promoted-entities.json` and asserts each
+   `MANIFEST-ASSERTED` claim still holds in the live FastAPI app.
+   As of the most recent push it reports **33 OK, 1 miss, 1 warn**
+   — the MISS is a documented legitimate divergence (see "What we
+   learned" below); the WARN is for a custom validator the verifier
+   correctly says it can't introspect.
 
 4. **The Flatpack stays alive.** `reference/original-flatpack.html` is
    on disk and runnable — open it in a browser, click "Load sample
@@ -129,50 +133,88 @@ by the live FastAPI app.
 ## What we learned
 
 The point of building this was to discover what the bridge gets wrong
-when actually used. Real findings, filed as issues against the
-relevant repos:
+when actually used. The exercise produced eight issues across both
+sides of the bridge — **all closed** as of the most recent push.
+Brief history:
 
-1. **Baseplate isn't a GitHub-template repo.** `gh repo create
-   --template ConceptPending/baseplate` fails because Baseplate's
-   template flag is off. The receiving docs say "use --template" but
-   you have to clone + reinit instead. **Issue: Baseplate.**
+1. ~~**Baseplate isn't a GitHub-template repo.**~~ [baseplate#32](https://github.com/ConceptPending/baseplate/issues/32),
+   fixed by toggling `is_template: true` on the Baseplate repo. The
+   `gh repo create --template ConceptPending/baseplate` flow now
+   works.
 
-2. **Verifier validation-rule keyword search is too lax.** The check
-   matches keywords from the manifest's rule text against
-   `app/*.py`. It matched our `"warning"` keyword because the comment
-   in `services/validation.py` *mentions* the original Flatpack
-   warning behaviour while *implementing* it as a strengthened error.
-   False-positive: the rule was technically not violated, but the
-   check would have happily accepted code that had no validation at
-   all if the keywords appeared anywhere. **Issue: Baseplate.**
+2. ~~**Verifier validation-rule keyword search is too lax.**~~ [baseplate#33](https://github.com/ConceptPending/baseplate/issues/33),
+   fixed by [flatpack#1](https://github.com/ConceptPending/flatpack/issues/1) +
+   the smarter verifier. Manifests now carry an optional
+   `validation_predicates` array — a structured form of validations.
+   The verifier resolves predicates against actual Pydantic and
+   SQLAlchemy declarations. The keyword fallback still exists but
+   reports WARN-not-OK and is scoped to `*Service` and
+   `@field_validator` bodies (no longer matches in comments).
 
-3. **Verifier doesn't check fields-within-entities.** It confirms
-   `Invoice` exists; doesn't confirm `invoice_date` is a `Date`
-   column. Already flagged with `TODO(verifier-v2)` in
-   `verify_promotion.py`.
+3. ~~**Verifier doesn't check fields-within-entities.**~~ [baseplate#34](https://github.com/ConceptPending/baseplate/issues/34),
+   fixed: `check_entities` now walks every field with a loose
+   type-compatibility map. This catches the `Invoice.supplier_name`
+   divergence (see below) — exactly the kind of finding the v0
+   verifier missed.
 
-4. **Verifier doesn't catch missing CODE-INFERRED entities.** The
-   Flatpack manifest only declares `Invoice`. The promotion plan
-   *introduces* `Supplier`, `ReviewBatch`, `ValidationError`. If we
-   had forgotten to add `Supplier` here, the verifier wouldn't catch
-   it — only manifest-declared entities are checked. **Issue: open
-   question for Baseplate.**
+4. ~~**Verifier doesn't catch missing CODE-INFERRED entities.**~~ [baseplate#37](https://github.com/ConceptPending/baseplate/issues/37),
+   fixed: new `reference/promoted-entities.json` convention. The
+   promotion-time agent declares the introduced entities here; the
+   verifier reads and checks them. This is what catches a forgotten
+   `Supplier` table.
 
-5. **`summary_print` export is flagged as client-side** by the
-   verifier's hint-map, but this project *does* expose a server
-   `/summary` endpoint that the printable view would call. The
-   verifier doesn't flag this contradiction. Minor; documented in
-   `verify_promotion.py`'s `EXPORT_URL_HINTS`. **Issue: Baseplate.**
+5. ~~**`summary_print` export was flagged as client-side.**~~ [baseplate#35](https://github.com/ConceptPending/baseplate/issues/35),
+   fixed: `EXPORT_URL_HINTS` updated to look for `/summary` and
+   `/print` routes. The verifier now correctly identifies the
+   server-side endpoint that backs the printable view.
 
-6. **Strengthened-rule case is handled silently.** The Flatpack said
-   "warning, defaults to GBP"; we strengthened to "error". The
-   verifier doesn't compare the *semantics* of validation rules — it
-   only checks the rule's keywords appear somewhere. A Baseplate that
-   *weakened* a rule would pass too. **Issue: Baseplate.**
+6. ~~**Strengthened-rule case is handled silently.**~~ [baseplate#36](https://github.com/ConceptPending/baseplate/issues/36),
+   fixed alongside #33. With structured predicates, a weakened rule
+   (e.g. `Field(gt=-1)` when the predicate said `gt=0`) fails the
+   predicate check and reports as MISS or WARN.
 
-The Flatpack-side issues file separately under
-github.com/ConceptPending/flatpack/issues; Baseplate-side ones under
-github.com/ConceptPending/baseplate/issues.
+7. ~~**`prompts/promote-flatpack.md` didn't reference `tools/promote.mjs`.**~~ [flatpack#2](https://github.com/ConceptPending/flatpack/issues/2),
+   fixed: the prompt now opens step 2 with the skeleton-generator
+   invocation.
+
+8. ~~**Structured validations in the manifest.**~~ [flatpack#1](https://github.com/ConceptPending/flatpack/issues/1),
+   fixed: optional `validation_predicates` array added to
+   `manifest.schema.json` with the documented vocabulary. The three
+   example Flatpacks (`invoice-cleaner`, `pricing-calculator`,
+   `case-chronology-helper`) now carry predicates.
+
+## What the verifier still flags — honestly
+
+After all of the above:
+
+- **1 MISS** on `entity Invoice.supplier_name`. This is **expected
+  and desirable**. The Flatpack manifest declared `supplier_name`
+  as a string field on Invoice; the Baseplate version factored it
+  out into a `Supplier` FK. The MISS represents intentional,
+  documented divergence — see [`reference/decisions.md`](reference/decisions.md)
+  item C. A real CI gate would either acknowledge this in code or
+  add an `expected-misses` convention (not yet a thing).
+
+- **1 WARN** on `predicate invoice_date:not_in_future`. The
+  `not_in_future` constraint isn't expressible in plain Pydantic,
+  so the predicate-resolver honestly says it can't introspect the
+  custom `@field_validator` that implements it. WARN, not MISS:
+  evidence is present (the validator exists), but the verifier
+  can't prove the predicate holds.
+
+These are honest residuals, not bugs. The verifier is doing the
+work — both the strong claims AND the limits are visible.
+
+## Bridge improvements log
+
+| Tier | Closed | Repos touched | Commits |
+|---|---|---|---|
+| 1 — quick wins | #2, #32, #35 | flatpack, baseplate | 4a280a2, 5470280 |
+| 2 — structured predicates | #1 | flatpack | b4043c5 |
+| 3 — smarter verifier | #33, #36 | baseplate | 01e77ab |
+| 4 — field-level checks | #34 | baseplate | 718bd9f |
+| 5 — promoted-entities.json | #37 | baseplate, flatpack | cfa4738, 605513a |
+| 6 — re-verify | (this) | flatpack-invoice-review-example | (this commit) |
 
 ## Related
 

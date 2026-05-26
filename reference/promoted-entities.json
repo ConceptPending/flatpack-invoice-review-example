@@ -1,0 +1,47 @@
+{
+  "$comment": "Entities the promotion plan introduced beyond the Flatpack's manifest. Format documented at github.com/ConceptPending/baseplate/blob/main/docs/promoting-a-flatpack.md step 2. The verifier reads this alongside original-flatpack.html.",
+  "entities": [
+    {
+      "name": "Supplier",
+      "source": "code-inferred",
+      "fields": [
+        { "name": "name", "type": "string", "required": true, "unique": true },
+        { "name": "aliases", "type": "list", "default": [] }
+      ]
+    },
+    {
+      "name": "ReviewBatch",
+      "source": "interview-required",
+      "fields": [
+        { "name": "uploaded_by_id", "type": "uuid", "required": true },
+        { "name": "source_filename", "type": "string", "required": true },
+        {
+          "name": "status",
+          "type": "enum",
+          "values": ["pending", "approved", "rejected"],
+          "default": "pending"
+        },
+        { "name": "clean_count", "type": "integer", "default": 0 },
+        { "name": "error_count", "type": "integer", "default": 0 }
+      ]
+    },
+    {
+      "name": "ValidationError",
+      "source": "code-inferred",
+      "fields": [
+        { "name": "batch_id", "type": "uuid", "required": true },
+        { "name": "original_row", "type": "json", "required": true },
+        { "name": "reasons", "type": "list", "required": true },
+        {
+          "name": "resolution",
+          "type": "enum",
+          "values": ["unresolved", "corrected", "dismissed"],
+          "default": "unresolved"
+        },
+        { "name": "resolved_by_id", "type": "uuid" },
+        { "name": "resolved_at", "type": "datetime" },
+        { "name": "resolved_to", "type": "json" }
+      ]
+    }
+  ]
+}

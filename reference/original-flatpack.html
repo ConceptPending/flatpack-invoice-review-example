@@ -188,6 +188,19 @@
     "currency outside [GBP, EUR, USD] is a warning and defaults to GBP",
     "currency normalises to upper case and trims whitespace"
   ],
+  "validation_predicates": [
+    { "field": "supplier_name",  "constraint": "required" },
+    { "field": "invoice_date",   "constraint": "required" },
+    { "field": "invoice_number", "constraint": "required" },
+    { "field": "amount",         "constraint": "required" },
+    { "field": "amount",         "constraint": "gt", "value": 0,
+      "description": "amount must be greater than zero" },
+    { "field": "invoice_date",   "constraint": "format", "value": "date" },
+    { "field": "invoice_date",   "constraint": "not_in_future" },
+    { "field": "invoice_number", "constraint": "unique",
+      "description": "duplicate invoice_number within a file is an error" },
+    { "field": "currency",       "constraint": "one_of", "value": ["GBP", "EUR", "USD"] }
+  ],
   "exports": ["clean_csv", "errors_csv", "summary_print"],
   "promotionSignals": [
     "Multiple reviewers need to share an invoice batch",

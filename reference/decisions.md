@@ -77,6 +77,37 @@ constraint is on the canonical form; we want bad inputs to fail
 fast at the schema layer with a clear error, not at the DB layer
 with a constraint-violation.
 
+### C. `Invoice.supplier_name` becomes `Invoice.supplier_id`
+
+The Flatpack's manifest declares `supplier_name` as a string field on
+the Invoice entity. The Baseplate version factors supplier identity
+out into a separate `Supplier` table and replaces the field with a
+foreign key `supplier_id` on `Invoice`. The supplier's name is on
+the `Supplier` row, not on the `Invoice` row.
+
+This is a real semantic change driven by the manifest's
+`promotionSignal`: *"Supplier records become a reference list reused
+across batches."* Without the FK, cross-batch reuse would either
+require name-equality string matching (fragile) or duplicate the
+supplier as a string on every Invoice (the Flatpack's behaviour).
+
+`make verify-promotion` correctly flags this as
+`MISS entity Invoice.supplier_name — no column named 'supplier_name'
+on table 'invoices'`. The MISS is **expected and desirable** — it is
+honest about a structural change the promotion made. A real CI gate
+in a similar project would either:
+
+1. Accept this MISS by listing it in a project-level allowlist
+   (e.g. `reference/expected-misses.json` — not yet a convention).
+2. Update the manifest's `entities[]` to reflect the post-promotion
+   shape (but the manifest is the **Flatpack's** declaration, frozen
+   at promotion time — modifying it muddies the source-of-truth).
+3. Make the case in the project README that this MISS represents
+   intentional, documented divergence.
+
+For this worked example, option (3) — the README's "What we learned"
+section captures the trade-off.
+
 ### B. The Flatpack's "warning" semantics for unknown currency
 
 The Flatpack treats out-of-list currency as a *warning* and defaults
