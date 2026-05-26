@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+@theme inline {
+  /* Semantic tokens */
+  --color-background: var(--bg);
+  --color-foreground: var(--fg);
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-el);
+  --color-border: var(--border-color);
+  --color-muted: var(--muted-color);
+  --color-accent: var(--accent-color);
+  --color-accent-bright: var(--accent-bright-color);
+
+  /* Border radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+
+  /* Shadows */
+  --shadow-panel: 0 24px 80px rgba(0, 0, 0, 0.24);
+}
+
+/* Light mode (default) */
+:root {
+  --bg: #f8fafc;
+  --fg: #0f172a;
+  --surface: #ffffff;
+  --surface-el: #f1f5f9;
+  --muted-color: #64748b;
+  --border-color: #e2e8f0;
+  --accent-color: #4f46e5;
+  --accent-bright-color: #6366f1;
+}
+
+/* Dark mode */
+.dark {
+  --bg: #0f172a;
+  --fg: #e2e8f0;
+  --surface: #1e293b;
+  --surface-el: #334155;
+  --muted-color: #94a3b8;
+  --border-color: #334155;
+  --accent-color: #6366f1;
+  --accent-bright-color: #818cf8;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+/* Status pills */
+.pill-active {
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.28);
+}
+
+.pill-pending {
+  background: rgba(148, 163, 184, 0.10);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.pill-warning {
+  background: rgba(234, 179, 8, 0.12);
+  color: #eab308;
+  border: 1px solid rgba(234, 179, 8, 0.28);
+}
+
+.pill-error {
+  background: rgba(239, 68, 68, 0.10);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.24);
+}

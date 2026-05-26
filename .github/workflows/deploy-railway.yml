@@ -1,0 +1,68 @@
+name: Deploy (Railway)
+
+# Triggered automatically when CI completes on main. To enable, set the
+# repo variable `RAILWAY_DEPLOY_ENABLED=true` and the secrets
+# `RAILWAY_TOKEN` (account/workspace token, not project token) and
+# `RAILWAY_PROJECT_ID`. Without the variable, jobs no-op so a freshly
+# cloned starter doesn't fail CI before Railway is set up.
+#
+# Swapping platforms: delete this file and add a `deploy-<platform>.yml`
+# alongside it. The CI workflow (ci.yml) is platform-agnostic.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+
+jobs:
+  deploy-backend:
+    name: Deploy backend
+    if: >-
+      github.event.workflow_run.conclusion == 'success'
+      && vars.RAILWAY_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # The RAILWAY_TOKEN secret holds a workspace/account token, so it must be
+      # fed as RAILWAY_API_TOKEN — the RAILWAY_TOKEN env var is for *project*
+      # tokens and rejects account tokens ("Invalid RAILWAY_TOKEN"). PROJECT_ID
+      # gives it context. See README "Deployment".
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+    steps:
+      # Check out the exact commit that passed CI, not the default branch HEAD.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Install Railway CLI
+        working-directory: .
+        run: npm install -g @railway/cli
+      - name: Deploy backend
+        # --environment is required because CI has no `.railway/` link dir;
+        # railway up otherwise errors with "No environment specified".
+        run: railway up --service backend --ci --environment production
+
+  deploy-frontend:
+    name: Deploy frontend
+    if: >-
+      github.event.workflow_run.conclusion == 'success'
+      && vars.RAILWAY_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Install Railway CLI
+        working-directory: .
+        run: npm install -g @railway/cli
+      - name: Deploy frontend
+        run: railway up --service frontend --ci --environment production

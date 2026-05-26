@@ -1,0 +1,11 @@
+# node_modules and .next are rebuilt in the image; keep secrets/cruft out too.
+node_modules/
+.next/
+out/
+.env
+.env.*
+npm-debug.log*
+.git/
+.gitignore
+Dockerfile
+.dockerignore

@@ -1,0 +1,15 @@
+# Keep secrets and local cruft out of the build context / image.
+.env
+.env.*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+*.db
+*.sqlite3
+.git/
+.gitignore
+Dockerfile
+.dockerignore

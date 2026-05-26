@@ -1,0 +1,27 @@
+version: 2
+updates:
+  # Groups bundle minor+patch updates into one weekly PR per ecosystem.
+  # Major bumps fall outside the group and get their own PRs so each
+  # breaking change can be evaluated on its own.
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    groups:
+      backend-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    groups:
+      frontend-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Cancel redundant PR runs, but never cancel a main run mid-deploy.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test-backend:
+    name: Backend — lint + tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Install (with dev deps)
+        run: pip install -e ".[dev]"
+      - name: Lint (ruff)
+        run: ruff check app/ tests/
+      - name: Tests
+        run: PYTHONPATH=. pytest -q
+
+  test-frontend:
+    name: Frontend — typecheck, lint, tests, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Lint (ESLint)
+        run: npm run lint
+      - name: Tests
+        run: npx vitest run
+      - name: Build
+        run: npm run build
