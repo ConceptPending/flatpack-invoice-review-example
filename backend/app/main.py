@@ -9,7 +9,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.responses import JSONResponse
 
-from app.api import auth, items, public
+from app.api import auth, batches, suppliers
 from app.bootstrap import ensure_admin_user
 from app.config import settings
 from app.database import async_session
@@ -54,8 +54,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="MyApp API",
+    title="Invoice Review API",
     version="0.1.0",
+    description=(
+        "Promoted from the Flatpack at "
+        "github.com/ConceptPending/flatpack/examples/invoice-cleaner.html "
+        "v0.2.0. See reference/ for the source Flatpack, promotion plan, "
+        "and decisions log."
+    ),
     lifespan=lifespan,
     docs_url="/docs" if settings.debug else None,
     redoc_url="/redoc" if settings.debug else None,
@@ -116,10 +122,8 @@ async def request_logging(request: Request, call_next):
 
 # Admin routes
 app.include_router(auth.router)
-app.include_router(items.router)
-
-# Public routes
-app.include_router(public.router)
+app.include_router(batches.router)
+app.include_router(suppliers.router)
 
 
 @app.get("/api/health")

@@ -1,8 +1,12 @@
 """Explicit coverage of the CSRF middleware contract.
 
-Every existing write test in test_items.py also exercises the happy path
+Every existing write test in test_batches.py also exercises the happy path
 implicitly. These tests pin down the failure modes and exemptions so the
 contract is visible.
+
+Adapted from the Baseplate template's tests/test_csrf.py — same behaviour,
+just re-pointed at /api/admin/suppliers (a write endpoint that exists in
+this project) instead of /api/admin/items (deleted with the Item slice).
 """
 
 import pytest
@@ -25,7 +29,7 @@ async def test_write_without_csrf_header_is_forbidden(client):
     matching X-CSRF-Token header is the classic CSRF attack shape — 403."""
     await _login(client)
     response = await client.post(
-        "/api/admin/items",
+        "/api/admin/suppliers",
         json={"name": "blocked"},
     )
     assert response.status_code == 403
@@ -36,7 +40,7 @@ async def test_write_without_csrf_header_is_forbidden(client):
 async def test_write_with_mismatched_csrf_token_is_forbidden(client):
     await _login(client)
     response = await client.post(
-        "/api/admin/items",
+        "/api/admin/suppliers",
         json={"name": "blocked"},
         headers={"X-CSRF-Token": "not-the-real-token"},
     )
@@ -47,7 +51,7 @@ async def test_write_with_mismatched_csrf_token_is_forbidden(client):
 async def test_write_with_matching_csrf_token_succeeds(client):
     csrf = await _login(client)
     response = await client.post(
-        "/api/admin/items",
+        "/api/admin/suppliers",
         json={"name": "ok"},
         headers={"X-CSRF-Token": csrf},
     )
@@ -58,7 +62,7 @@ async def test_write_with_matching_csrf_token_succeeds(client):
 async def test_safe_methods_dont_require_csrf(client):
     """GET / HEAD / OPTIONS are always allowed regardless of csrf state."""
     await _login(client)
-    response = await client.get("/api/admin/items")  # no header attached
+    response = await client.get("/api/admin/suppliers")  # no header attached
     assert response.status_code == 200
 
 
@@ -86,7 +90,7 @@ async def test_csrf_endpoint_returns_token_and_sets_cookie(client):
 async def test_anonymous_write_is_forbidden(client):
     """No login, no cookie, no header — middleware 403s before auth even runs."""
     response = await client.post(
-        "/api/admin/items",
+        "/api/admin/suppliers",
         json={"name": "anonymous"},
     )
     assert response.status_code == 403
