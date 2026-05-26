@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Supplier invoice cleaner</title>
+<!-- FLATPACK:HELP
+
+  Flatpack:     Supplier invoice cleaner (example)
+  Version:      0.2.0
+  Purpose:      Clean an exported supplier-invoice CSV: validate rows,
+                warn on unusual currencies, flag duplicates and
+                future-dated rows, export clean + error files.
+  Data:         local-only
+  Network:      none
+  Persistence:  localStorage (column mappings only)
+
+  Built from templates/csv-cleaner.html. Differences from the template:
+    - Domain-specific schema and column auto-mapping for supplier invoices.
+    - Future-dated invoices are flagged as errors.
+    - Currency outside [GBP, EUR, USD] is a warning (defaults to GBP),
+      not a hard error.
+    - Per-supplier and per-currency totals in the print summary.
+
+  HUMAN HELP
+    Inputs:   a CSV with columns named like supplier, invoice number,
+              date, amount, and currency (auto-mapping handles most
+              vendor exports)
+    Outputs:  clean.csv, errors.csv, and a printable summary including
+              totals by currency and top-supplier counts
+    Limits:   single batch — no cross-file deduplication; >50k rows will
+              be slow because parsing runs on the main thread
+
+  AI EDITING NOTES
+    - Safe to modify:  SCHEMA, VALIDATION, RENDERING, STYLES.
+    - Edit with care:  CORE_LOGIC — the CSV parser and dedupe logic are
+                       covered by tests.
+    - Avoid modifying: IMPORT_EXPORT without updating filename expectations.
+    - Rules: no network, no external dependencies, no embedded secrets.
+    - Run TEST_CASES (?test=1) after changes to CORE_LOGIC or VALIDATION.
+-->
+
+<!-- FLATPACK:STYLES -->
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #fff; --ink: #1b1b1a; --muted: #6a6a66;
+    --line: #e5e5e0; --accent: #2b6cb0; --accent-ink: #fff;
+    --warn: #b45309; --error: #b91c1c; --ok: #166534;
+    --radius: 8px; --gap: 16px; --maxw: 1100px;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); line-height: 1.45; }
+  main, header, footer { max-width: var(--maxw); margin: 0 auto; padding: 24px; }
+  header { padding-bottom: 0; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 12px; }
+  .muted { color: var(--muted); }
+  .privacy { background: #eef4fb; border: 1px solid #cfe0f3; color: #1e3a5f; padding: 10px 12px; border-radius: var(--radius); font-size: 0.9rem; margin: 16px 0 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; margin-bottom: var(--gap); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  label { font-weight: 600; font-size: 0.95rem; display: block; margin-bottom: 4px; }
+  select { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius); font: inherit; background: #fff; }
+  .btn { appearance: none; border: 1px solid var(--line); background: #fff; color: var(--ink); padding: 8px 14px; border-radius: var(--radius); font: inherit; cursor: pointer; }
+  .btn:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+  .btn + .btn { margin-left: 8px; }
+  .dropzone { border: 2px dashed var(--line); border-radius: var(--radius); padding: 24px; text-align: center; cursor: pointer; background: #fff; }
+  .dropzone.drag { border-color: var(--accent); background: #f4f9ff; }
+  .alert { border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; font-size: 0.95rem; }
+  .alert.warn { background: #fdf6e7; border: 1px solid #f3d99a; color: var(--warn); }
+  .alert.error { background: #fdecec; border: 1px solid #f3b8b8; color: var(--error); }
+  .alert.ok { background: #e9f5ec; border: 1px solid #bbe0c4; color: var(--ok); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: #fafaf7; position: sticky; top: 0; }
+  .scroll { max-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap); }
+  @media (max-width: 720px) { .stats { grid-template-columns: 1fr 1fr; } }
+  .stat { background: #fafaf7; border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+  .stat .n { font-size: 1.6rem; font-weight: 700; }
+  .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; }
+  .badge.bad { background: #fdecec; color: var(--error); }
+  .badge.warn { background: #fdf6e7; color: var(--warn); }
+  .badge.ok { background: #e9f5ec; color: var(--ok); }
+  footer { color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--line); margin-top: 24px; }
+  .map-grid { display: grid; grid-template-columns: 200px 1fr; gap: 8px; align-items: center; }
+
+  @media print {
+    body { background: #fff; color: #000; }
+    .no-print { display: none !important; }
+    main { max-width: none; padding: 0; }
+    .card { box-shadow: none; border: 1px solid #ccc; page-break-inside: avoid; }
+    .scroll { max-height: none; }
+    #print-report { display: block !important; }
+  }
+</style>
+
+<!-- FLATPACK:HTML -->
+</head>
+<body>
+<header>
+  <h1 id="app-title">Supplier invoice cleaner</h1>
+  <p class="muted" id="app-purpose">Drop a supplier-invoice CSV, map columns, validate rows, export a clean file.</p>
+  <div class="privacy" id="privacy-banner" role="note">
+    Local-first: invoices are not uploaded. Column mappings are saved locally on this device.
+  </div>
+</header>
+
+<main>
+  <section class="card no-print" id="upload-card">
+    <h2>1. Load a CSV</h2>
+    <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Drop a CSV file or click to choose">
+      <p><strong>Drop a supplier-invoice CSV here</strong> or click to choose.</p>
+      <p class="muted">Files stay on your machine. Nothing is uploaded.</p>
+      <input type="file" id="file-input" accept=".csv,text/csv" hidden>
+    </div>
+    <div class="row" style="margin-top:12px;">
+      <button class="btn" type="button" id="sample-btn">Load sample data</button>
+      <span class="muted" id="file-info"></span>
+    </div>
+  </section>
+
+  <section class="card no-print" id="mapping-card" hidden>
+    <h2>2. Map columns</h2>
+    <p class="muted">Match the schema fields to the columns in your file. Mappings are remembered on this device.</p>
+    <div class="map-grid" id="mapping-grid"></div>
+  </section>
+
+  <section class="card" id="results-card" hidden>
+    <h2>3. Results</h2>
+    <div class="stats" id="stats"></div>
+    <div id="warnings" style="margin-top:12px;"></div>
+    <h2 style="margin-top:16px;">Preview</h2>
+    <div class="scroll"><table id="preview-table"></table></div>
+    <div class="row no-print" style="margin-top:12px;">
+      <button class="btn primary" type="button" id="export-clean">Export clean CSV</button>
+      <button class="btn" type="button" id="export-errors">Export errors CSV</button>
+      <button class="btn" type="button" id="print-btn">Print summary</button>
+      <button class="btn" type="button" id="reset-btn">Reset</button>
+    </div>
+  </section>
+
+  <section id="print-report" class="card" aria-label="Printable summary" hidden>
+    <h2 id="report-title">Supplier invoice cleaner summary</h2>
+    <p class="muted" id="report-subtitle"></p>
+    <h3 style="margin-top:16px;font-size:1rem;">Totals by currency</h3>
+    <table><tbody id="report-currency-rows"></tbody></table>
+    <h3 style="margin-top:16px;font-size:1rem;">Top suppliers (clean rows)</h3>
+    <table><tbody id="report-supplier-rows"></tbody></table>
+    <h3 style="margin-top:16px;font-size:1rem;">Top issue reasons</h3>
+    <table><tbody id="report-issue-rows"></tbody></table>
+    <p class="muted" id="report-footer" style="margin-top:12px;"></p>
+  </section>
+</main>
+
+<footer>
+  <span id="footer-version"></span> · Local-only · No network · Single file
+</footer>
+
+<!-- FLATPACK:MANIFEST -->
+<script type="application/json" id="flatpack-manifest">
+{
+  "name": "Supplier invoice cleaner",
+  "artifactType": "csv-cleaner",
+  "version": "0.2.0",
+  "scope": "personal",
+  "persistence": "localStorage",
+  "network": "none",
+  "entities": [
+    {
+      "name": "Invoice",
+      "fields": [
+        { "name": "supplier_name",  "type": "string", "required": true },
+        { "name": "invoice_date",   "type": "date",   "required": true, "constraint": "not in the future" },
+        { "name": "invoice_number", "type": "string", "required": true, "unique": true },
+        { "name": "amount",         "type": "number", "required": true, "gt": 0 },
+        { "name": "currency",       "type": "string", "default": "GBP", "warnIfNotIn": ["GBP","EUR","USD"] }
+      ]
+    }
+  ],
+  "validations": [
+    "supplier_name, invoice_date, invoice_number, amount are required",
+    "amount must be greater than zero",
+    "invoice_date must be a valid date and not in the future",
+    "duplicate invoice_number within a file is an error",
+    "currency outside [GBP, EUR, USD] is a warning and defaults to GBP",
+    "currency normalises to upper case and trims whitespace"
+  ],
+  "exports": ["clean_csv", "errors_csv", "summary_print"],
+  "promotionSignals": [
+    "Multiple reviewers need to share an invoice batch",
+    "Validated invoices must be stored centrally and de-duplicated across files",
+    "Audit history of imports and changes is required",
+    "Supplier records become a reference list reused across batches",
+    "Per-currency totals are reported to finance on a recurring basis"
+  ],
+  "archetype": "import-validate-store"
+}
+</script>
+
+<script>
+"use strict";
+
+/* FLATPACK:METADATA */
+const APP_META = {
+  name: "Supplier invoice cleaner",
+  version: "0.2.0",
+  description: "Clean an exported supplier-invoice CSV: validate, surface duplicates and future-dated rows, export clean + errors.",
+  dataPolicy: "local-only",
+  persistence: "localStorage",
+  network: "none"
+};
+const STORAGE_KEY = "flatpack:invoice-cleaner:v1";
+const ALLOWED_CURRENCIES = ["GBP", "EUR", "USD"];
+const DEFAULT_CURRENCY = "GBP";
+
+/* FLATPACK:SCHEMA */
+const schema = {
+  supplier_name:  { type: "string", required: true,                label: "Supplier name" },
+  invoice_date:   { type: "date",   required: true,                label: "Invoice date" },
+  invoice_number: { type: "string", required: true, unique: true,  label: "Invoice number" },
+  amount:         { type: "number", required: true, gt: 0,         label: "Amount" },
+  currency:       { type: "string", required: false, warnIfNotIn: ALLOWED_CURRENCIES, label: "Currency" }
+};
+const schemaFields = Object.keys(schema);
+
+/* FLATPACK:STATE */
+const initialState = {
+  fileName: null,
+  rawHeaders: [],
+  rawRows: [],
+  mapping: {},
+  cleaned: [],
+  errors: [],
+  warnings: []
+};
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return { ...structuredClone(initialState), mapping: parsed.mapping || {} };
+  } catch { return null; }
+}
+function saveState() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ mapping: state.mapping })); } catch {}
+}
+let state = loadState() ?? structuredClone(initialState);
+
+/* FLATPACK:CORE_LOGIC — pure */
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = "", inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') { if (text[i+1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += c;
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ',') { row.push(field); field = ""; }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ""; }
+      else if (c === '\r') { /* swallow */ }
+      else field += c;
+    }
+  }
+  if (field !== "" || row.length) { row.push(field); rows.push(row); }
+  while (rows.length && rows[rows.length-1].every(v => v === "")) rows.pop();
+  return rows;
+}
+function toCSV(rows) { return rows.map(r => r.map(toCSVCell).join(",")).join("\r\n"); }
+function toCSVCell(v) {
+  const s = v == null ? "" : String(v);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function autoMap(headers) {
+  // Strong supplier-invoice synonyms.
+  const synonyms = {
+    supplier_name:  ["supplier", "vendor", "company", "merchant"],
+    invoice_date:   ["date", "issued", "invoicedate", "issuedate"],
+    invoice_number: ["invoice", "invoicenumber", "invoiceno", "invoice_id", "number", "ref"],
+    amount:         ["amount", "total", "gross", "value", "amt"],
+    currency:       ["currency", "ccy", "cur"]
+  };
+  const norm = s => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
+  const map = {};
+  for (const field of schemaFields) {
+    const want = synonyms[field] || [norm(field)];
+    let found = "";
+    for (const h of headers) {
+      const n = norm(h);
+      if (n === norm(field)) { found = h; break; }
+      if (!found && want.some(w => n === w)) found = h;
+    }
+    if (!found) {
+      for (const h of headers) {
+        const n = norm(h);
+        if (want.some(w => n.includes(w))) { found = h; break; }
+      }
+    }
+    map[field] = found;
+  }
+  return map;
+}
+function applyMapping(rawRows, headers, mapping) {
+  const idx = Object.fromEntries(schemaFields.map(f => [f, mapping[f] ? headers.indexOf(mapping[f]) : -1]));
+  return rawRows.map(r => {
+    const o = {};
+    for (const f of schemaFields) { o[f] = idx[f] >= 0 ? (r[idx[f]] ?? "") : ""; }
+    return o;
+  });
+}
+function normaliseCurrency(v) {
+  return String(v || "").trim().toUpperCase();
+}
+/* FLATPACK:VALIDATION */
+function validateRow(row, rules) {
+  const errs = [], warns = [];
+  for (const [k, r] of Object.entries(rules)) {
+    const v = row[k];
+    const empty = v === undefined || v === null || v === "";
+    if (r.required && empty) { errs.push(`${r.label} missing`); continue; }
+    if (empty) continue;
+    if (r.type === "number") {
+      const n = Number(v);
+      if (!Number.isFinite(n)) errs.push(`${r.label} not a number`);
+      else if (r.gt !== undefined && !(n > r.gt)) errs.push(`${r.label} must be greater than ${r.gt}`);
+    }
+    if (r.type === "date") {
+      const d = new Date(v);
+      if (Number.isNaN(d.getTime())) errs.push(`${r.label} not a valid date`);
+      else if (d.getTime() > Date.now() + 24*60*60*1000) errs.push(`${r.label} is in the future`);
+    }
+    if (r.warnIfNotIn && !r.warnIfNotIn.includes(normaliseCurrency(v))) {
+      warns.push(`${r.label} "${v}" outside ${r.warnIfNotIn.join("/")} — defaulting to ${DEFAULT_CURRENCY}`);
+    }
+  }
+  return { errs, warns };
+}
+function cleanAndValidate(rawRows, headers, mapping, rules) {
+  const mapped = applyMapping(rawRows, headers, mapping);
+  const seen = new Map();
+  const cleaned = [], errors = [], warnings = [];
+  mapped.forEach((row, i) => {
+    const rowNum = i + 2;
+    const { errs, warns } = validateRow(row, rules);
+
+    // Normalise + default currency
+    if (row.currency) row.currency = normaliseCurrency(row.currency);
+    if (!ALLOWED_CURRENCIES.includes(row.currency)) row.currency = DEFAULT_CURRENCY;
+
+    // Uniqueness — only fail when invoice_number is present
+    if (row.invoice_number) {
+      const prior = seen.get(row.invoice_number);
+      if (prior !== undefined) errs.push(`Invoice number duplicates row ${prior}`);
+      else seen.set(row.invoice_number, rowNum);
+    }
+
+    if (warns.length) warnings.push({ row: rowNum, reasons: warns, original: row });
+    if (errs.length) errors.push({ row: rowNum, reasons: errs, original: row });
+    else cleaned.push(row);
+  });
+  return { cleaned, errors, warnings };
+}
+
+/* FLATPACK:IMPORT_EXPORT */
+function exportCleanCSV() {
+  const header = schemaFields;
+  const rows = [header, ...state.cleaned.map(r => header.map(k => r[k]))];
+  triggerDownload(new Blob([toCSV(rows)], { type: "text/csv;charset=utf-8" }), filename("clean"));
+}
+function exportErrorsCSV() {
+  const header = ["row", "reasons", ...schemaFields];
+  const rows = [header, ...state.errors.map(e => [e.row, e.reasons.join("; "), ...schemaFields.map(k => e.original[k])])];
+  triggerDownload(new Blob([toCSV(rows)], { type: "text/csv;charset=utf-8" }), filename("errors"));
+}
+function filename(suffix) {
+  const base = (state.fileName || "invoices").replace(/\.csv$/i, "");
+  return `${base}.${suffix}.csv`;
+}
+function triggerDownload(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+function resetAll() {
+  const keep = state.mapping;
+  state = structuredClone(initialState);
+  state.mapping = keep;
+  saveState();
+}
+
+/* FLATPACK:RENDERING */
+const $ = (s) => document.querySelector(s);
+
+function renderHeader() {
+  $("#app-title").textContent = APP_META.name;
+  $("#app-purpose").textContent = APP_META.description;
+  $("#privacy-banner").textContent = "Local-first: invoices are not uploaded. Column mappings are saved locally on this device.";
+  $("#footer-version").textContent = `${APP_META.name} v${APP_META.version}`;
+}
+function renderMapping() {
+  const card = $("#mapping-card"), grid = $("#mapping-grid");
+  if (!state.rawHeaders.length) { card.hidden = true; grid.innerHTML = ""; return; }
+  card.hidden = false;
+  grid.innerHTML = schemaFields.map(f => `
+    <label for="map-${f}">${escapeHtml(schema[f].label)}${schema[f].required ? " *" : ""}</label>
+    <select id="map-${f}" data-map-field="${f}">
+      <option value="">— none —</option>
+      ${state.rawHeaders.map(h => `<option value="${escapeAttr(h)}" ${state.mapping[f] === h ? "selected" : ""}>${escapeHtml(h)}</option>`).join("")}
+    </select>
+  `).join("");
+}
+function renderResults() {
+  const card = $("#results-card"), report = $("#print-report");
+  if (!state.rawRows.length) { card.hidden = true; report.hidden = true; return; }
+  card.hidden = false; report.hidden = false;
+
+  const totalRows = state.rawRows.length;
+  const cleanCount = state.cleaned.length;
+  const errorCount = state.errors.length;
+  const warnCount = state.warnings.length;
+
+  $("#stats").innerHTML = `
+    <div class="stat"><div class="muted">Rows in file</div><div class="n">${totalRows}</div></div>
+    <div class="stat"><div class="muted">Clean</div><div class="n" style="color: var(--ok)">${cleanCount}</div></div>
+    <div class="stat"><div class="muted">Errors</div><div class="n" style="color: var(--error)">${errorCount}</div></div>
+    <div class="stat"><div class="muted">Warnings</div><div class="n" style="color: var(--warn)">${warnCount}</div></div>
+  `;
+
+  const unmapped = schemaFields.filter(f => schema[f].required && !state.mapping[f]);
+  const parts = [];
+  if (unmapped.length) parts.push(`<div class="alert warn">Map the required fields: ${unmapped.map(f => schema[f].label).join(", ")}.</div>`);
+  if (errorCount) parts.push(`<div class="alert error">${errorCount} row(s) failed validation. Download the errors CSV for details.</div>`);
+  if (warnCount) parts.push(`<div class="alert warn">${warnCount} row(s) had currency outside ${ALLOWED_CURRENCIES.join("/")} and were defaulted to ${DEFAULT_CURRENCY}.</div>`);
+  if (!parts.length && !unmapped.length) parts.push(`<div class="alert ok">All rows pass validation.</div>`);
+  $("#warnings").innerHTML = parts.join("");
+
+  const preview = [
+    ...state.cleaned.slice(0, 10).map(r => ({ status: "ok", row: r, reasons: "" })),
+    ...state.errors.slice(0, 10).map(e => ({ status: "bad", row: e.original, reasons: e.reasons.join("; ") }))
+  ];
+  $("#preview-table").innerHTML = `
+    <thead><tr><th>Status</th>${schemaFields.map(f => `<th>${escapeHtml(schema[f].label)}</th>`).join("")}<th>Issues</th></tr></thead>
+    <tbody>${preview.map(p => `
+      <tr>
+        <td><span class="badge ${p.status === "ok" ? "ok" : "bad"}">${p.status === "ok" ? "OK" : "Error"}</span></td>
+        ${schemaFields.map(f => `<td>${escapeHtml(String(p.row[f] ?? ""))}</td>`).join("")}
+        <td class="muted">${escapeHtml(p.reasons)}</td>
+      </tr>
+    `).join("")}</tbody>
+  `;
+
+  // Print summary content
+  $("#report-title").textContent = `${APP_META.name} — ${state.fileName || "(unsaved)"}`;
+  $("#report-subtitle").textContent = `${new Date().toLocaleString()} · ${totalRows} rows · ${cleanCount} clean · ${errorCount} errors · ${warnCount} warnings`;
+
+  const byCurrency = {};
+  for (const r of state.cleaned) {
+    const c = r.currency || DEFAULT_CURRENCY;
+    byCurrency[c] = (byCurrency[c] || 0) + Number(r.amount || 0);
+  }
+  $("#report-currency-rows").innerHTML = Object.entries(byCurrency)
+    .sort((a,b) => b[1]-a[1])
+    .map(([c, total]) => `<tr><th scope="row">${escapeHtml(c)}</th><td>${formatMoney(total, c)}</td></tr>`)
+    .join("") || `<tr><td colspan="2" class="muted">No clean rows.</td></tr>`;
+
+  const bySupplier = {};
+  for (const r of state.cleaned) {
+    bySupplier[r.supplier_name] = (bySupplier[r.supplier_name] || 0) + 1;
+  }
+  $("#report-supplier-rows").innerHTML = Object.entries(bySupplier)
+    .sort((a,b) => b[1]-a[1]).slice(0, 8)
+    .map(([s, n]) => `<tr><th scope="row">${escapeHtml(s)}</th><td>${n} invoice${n === 1 ? "" : "s"}</td></tr>`)
+    .join("") || `<tr><td colspan="2" class="muted">No clean rows.</td></tr>`;
+
+  const reasonCounts = {};
+  for (const e of state.errors) for (const r of e.reasons) reasonCounts[r] = (reasonCounts[r] || 0) + 1;
+  $("#report-issue-rows").innerHTML = Object.entries(reasonCounts)
+    .sort((a,b) => b[1]-a[1]).slice(0, 8)
+    .map(([reason, n]) => `<tr><th scope="row">${escapeHtml(reason)}</th><td>${n}</td></tr>`)
+    .join("") || `<tr><td colspan="2" class="muted">No validation issues to summarise.</td></tr>`;
+
+  $("#report-footer").textContent = `Generated by ${APP_META.name} v${APP_META.version} · local-only.`;
+
+  $("#export-clean").disabled = cleanCount === 0;
+  $("#export-errors").disabled = errorCount === 0;
+}
+function render() { renderHeader(); renderMapping(); renderResults(); saveState(); }
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function escapeAttr(s) { return escapeHtml(s); }
+function formatMoney(amount, currency) {
+  try { return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount); }
+  catch { return `${currency} ${Number(amount).toFixed(2)}`; }
+}
+
+/* FLATPACK:EVENTS */
+function loadCSVText(text, name) {
+  const rows = parseCSV(text);
+  if (!rows.length) { alert("No rows found in file."); return; }
+  state.fileName = name;
+  state.rawHeaders = rows[0].map(h => String(h).trim());
+  state.rawRows = rows.slice(1);
+  const auto = autoMap(state.rawHeaders);
+  const merged = {};
+  for (const f of schemaFields) {
+    const saved = state.mapping?.[f];
+    merged[f] = (saved && state.rawHeaders.includes(saved)) ? saved : auto[f];
+  }
+  state.mapping = merged;
+  recompute();
+}
+function recompute() {
+  const { cleaned, errors, warnings } = cleanAndValidate(state.rawRows, state.rawHeaders, state.mapping, schema);
+  state.cleaned = cleaned;
+  state.errors = errors;
+  state.warnings = warnings;
+  render();
+}
+function bindEvents() {
+  const dz = $("#dropzone"), input = $("#file-input");
+
+  dz.addEventListener("click", () => input.click());
+  dz.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } });
+  ["dragenter", "dragover"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add("drag"); }));
+  ["dragleave", "drop"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove("drag"); }));
+  dz.addEventListener("drop", async e => {
+    const f = e.dataTransfer.files?.[0];
+    if (f) await handleFile(f);
+  });
+  input.addEventListener("change", async e => {
+    const f = e.target.files?.[0];
+    if (f) await handleFile(f);
+  });
+
+  $("#sample-btn").addEventListener("click", () => {
+    loadCSVText(SAMPLE_CSV, "sample-invoices.csv");
+    $("#file-info").textContent = `Loaded sample (${state.rawRows.length} rows).`;
+  });
+
+  document.addEventListener("change", e => {
+    const t = e.target;
+    if (t && t.dataset && t.dataset.mapField) {
+      state.mapping[t.dataset.mapField] = t.value || "";
+      recompute();
+    }
+  });
+
+  $("#export-clean").addEventListener("click", exportCleanCSV);
+  $("#export-errors").addEventListener("click", exportErrorsCSV);
+  $("#print-btn").addEventListener("click", () => window.print());
+  $("#reset-btn").addEventListener("click", () => { resetAll(); render(); $("#file-info").textContent = ""; });
+}
+async function handleFile(file) {
+  const text = await file.text();
+  loadCSVText(text, file.name);
+  $("#file-info").textContent = `${file.name} — ${state.rawRows.length} rows.`;
+}
+
+/* Sample data — column names use a vendor-export style to exercise auto-mapping. */
+const SAMPLE_CSV =
+`Vendor,Invoice Date,Invoice No.,Total,CCY
+Acme Ltd,2026-01-15,INV-001,1200.50,GBP
+Borealis Ops,2026-01-18,INV-002,840.00,EUR
+Acme Ltd,2026-01-22,INV-003,640.00,GBP
+Northwind,2026-01-25,,250.00,GBP
+Northwind,2026-01-25,INV-002,250.00,GBP
+Initech,bad-date,INV-004,99.00,USD
+Globex,2026-02-01,INV-005,-45.00,GBP
+"Wayne, Inc.",2026-02-03,INV-006,3200.00,USD
+Stark Industries,2026-02-04,INV-007,18000.00,JPY
+Cyberdyne,2099-12-31,INV-008,500.00,USD
+Acme Ltd,2026-02-10,INV-009,450.00,gbp
+`;
+
+/* FLATPACK:TEST_CASES */
+const TEST_CASES = [
+  {
+    name: "parseCSV handles quoted commas",
+    run: () => parseCSV(`a,b,c\n"hello, world",2,3\n`)[1][0] === "hello, world"
+  },
+  {
+    name: "validateRow flags future invoice date",
+    run: () => {
+      const future = new Date(Date.now() + 365*24*60*60*1000).toISOString().slice(0,10);
+      const { errs } = validateRow({ supplier_name: "X", invoice_date: future, invoice_number: "Y", amount: 1, currency: "GBP" }, schema);
+      return errs.some(e => e.includes("future"));
+    }
+  },
+  {
+    name: "amount must be > 0",
+    run: () => {
+      const { errs } = validateRow({ supplier_name: "X", invoice_date: "2026-01-01", invoice_number: "Y", amount: 0, currency: "GBP" }, schema);
+      return errs.some(e => e.includes("Amount"));
+    }
+  },
+  {
+    name: "unknown currency is a warning, not an error",
+    run: () => {
+      const { errs, warns } = validateRow({ supplier_name: "X", invoice_date: "2026-01-01", invoice_number: "Y", amount: 1, currency: "JPY" }, schema);
+      return errs.length === 0 && warns.some(w => w.includes("JPY"));
+    }
+  },
+  {
+    name: "currency normalisation lowercases gbp → GBP",
+    run: () => normaliseCurrency("  gbp ") === "GBP"
+  },
+  {
+    name: "cleanAndValidate detects duplicate invoice numbers",
+    run: () => {
+      const rows = [["A","2026-01-01","X","1","GBP"], ["B","2026-01-02","X","2","GBP"]];
+      const headers = ["supplier_name","invoice_date","invoice_number","amount","currency"];
+      const mapping = Object.fromEntries(headers.map(h => [h, h]));
+      const { errors } = cleanAndValidate(rows, headers, mapping, schema);
+      return errors.length === 1 && errors[0].reasons.some(r => r.includes("duplicates"));
+    }
+  },
+  {
+    name: "autoMap picks Vendor for supplier_name and CCY for currency",
+    run: () => {
+      const m = autoMap(["Vendor","Invoice Date","Invoice No.","Total","CCY"]);
+      return m.supplier_name === "Vendor" && m.currency === "CCY" && m.amount === "Total";
+    }
+  },
+  {
+    name: "bindEvents attaches listeners without throwing",
+    run: () => {
+      const realQS = document.querySelector;
+      const realAEL = document.addEventListener;
+      let attached = 0;
+      const mockEl = {
+        addEventListener: () => { attached++; },
+        classList: { add(){}, remove(){}, toggle(){} },
+        style: {}, dataset: {}, hidden: false, value: "", checked: false, textContent: ""
+      };
+      document.querySelector = () => mockEl;
+      document.addEventListener = () => { attached++; };
+      try { bindEvents(); return attached > 0; }
+      finally {
+        document.querySelector = realQS;
+        document.addEventListener = realAEL;
+      }
+    }
+  },
+  {
+    name: "loadState tolerates malformed stored data",
+    run: () => {
+      const realGet = localStorage.getItem;
+      localStorage.getItem = () => "not json {{{";
+      try { return loadState() === null; }
+      finally { localStorage.getItem = realGet; }
+    }
+  }
+];
+function runTests() {
+  const results = TEST_CASES.map(t => {
+    try { return { name: t.name, passed: !!t.run() }; }
+    catch (e) { return { name: t.name, passed: false, error: String(e) }; }
+  });
+  // eslint-disable-next-line no-console
+  console.table(results);
+  return results;
+}
+
+/* FLATPACK:BOOT */
+document.addEventListener("DOMContentLoaded", () => {
+  bindEvents();
+  render();
+  if (new URLSearchParams(location.search).get("test") === "1") runTests();
+});
+</script>
+</body>
+</html>
