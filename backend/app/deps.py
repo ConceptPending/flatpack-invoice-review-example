@@ -10,6 +10,12 @@ from app.database import get_db
 from app.models.user import User
 
 
+def roles_for(user: User) -> frozenset[str]:
+    """The lifecycle roles an authenticated user holds. `is_admin` gates the
+    admin area; this returns which lifecycle transitions the admin may fire."""
+    return user.role_set
+
+
 async def get_current_admin(
     access_token: str | None = Cookie(default=None),
     db: AsyncSession = Depends(get_db),

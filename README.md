@@ -89,6 +89,7 @@ in the Baseplate repo:
 | `admin-users` | Yes (as-is from base) | Base already supports multiple admins. No `/admin/users` UI built. |
 | `audit-log` | **Stubbed** | Table created (matches recipe model). Hooks are TODO markers at each call site (`# TODO(audit-log-recipe)` in `app/api/batches.py`). Recipe walk is unfinished. |
 | `public-submission-and-admin-queue` | **Adapted** | The "public" surface is the authenticated CSV upload page; the queue UI is the batch list. No anonymous endpoints. Frontend is out of scope for this scaffold. |
+| [`lifecycle-state-machine`](https://github.com/ConceptPending/baseplate/blob/main/docs/recipes/lifecycle-state-machine.md) | **Applied** | `ReviewBatch.status` moves through a declarative state machine (`app/statespec/batch_spec.py`) instead of a free-form setter: legal transitions only, role-gated (`reviewer` can reject, only `approver` approves), and a guard that refuses to approve a batch with unresolved validation errors. Verified by a Hypothesis suite (`tests/test_batch_statespec.py`); the lifecycle renders to [`docs/specs/batch-lifecycle.md`](docs/specs/batch-lifecycle.md). Adds `User.roles`. |
 
 ## What's deliberately out of scope
 

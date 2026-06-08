@@ -41,6 +41,7 @@ async def db_engine():
 
     # Seed the test admin user. Lifespan doesn't run under ASGITransport, so
     # we do here what bootstrap.ensure_admin_user would do in real startup.
+    from app.roles import HUMAN_ROLES
     from app.services.users import UserService
 
     session_factory = async_sessionmaker(
@@ -52,6 +53,7 @@ async def db_engine():
             email=TEST_ADMIN_EMAIL,
             password_hash=_TEST_HASH,
             is_admin=True,
+            roles=HUMAN_ROLES,
         )
 
     yield engine

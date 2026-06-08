@@ -2,6 +2,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.roles import HUMAN_ROLES
 from app.services.users import UserService
 
 logger = structlog.get_logger()
@@ -28,10 +29,13 @@ async def ensure_admin_user(db: AsyncSession) -> None:
         )
         return
 
+    # The bootstrap admin is the superuser — grant every lifecycle role so the
+    # first account can drive any workflow. Other users get roles deliberately.
     user = await UserService.create(
         db,
         email=settings.admin_email,
         password_hash=settings.admin_password_hash,
         is_admin=True,
+        roles=HUMAN_ROLES,
     )
     logger.info("admin_user_bootstrapped", user_id=str(user.id), email=user.email)

@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.invoice import Invoice
 from app.models.review_batch import BatchStatus, ReviewBatch
 from app.models.validation_error import ErrorResolution, ValidationError
+from app.statespec import apply
+from app.statespec.batch_spec import BATCH_SPEC
 from app.services.csv_parser import (
     SCHEMA_FIELDS,
     apply_mapping,
@@ -163,10 +165,25 @@ class BatchService:
         return await db.get(ReviewBatch, batch_id)
 
     @staticmethod
-    async def set_status(
-        db: AsyncSession, batch: ReviewBatch, status: BatchStatus
+    async def transition(
+        db: AsyncSession,
+        batch: ReviewBatch,
+        action: str,
+        actor_roles: frozenset[str],
     ) -> ReviewBatch:
-        batch.status = status
+        """Fire a named lifecycle transition on a batch.
+
+        All the decision logic — legal from this state, actor permitted, guard
+        holds (e.g. no unresolved errors) — lives in the generic engine's
+        `apply`. This method only supplies the current state plus the snapshot
+        the guard reads and persists the result. `apply` raises a
+        `TransitionError` subclass on refusal; the route maps those to HTTP.
+        """
+        snapshot = {"status": batch.status.value, "error_count": batch.error_count}
+        new_state = apply(
+            BATCH_SPEC, action, batch.status.value, actor_roles, snapshot
+        )
+        batch.status = BatchStatus(new_state)
         await db.commit()
         await db.refresh(batch)
         return batch

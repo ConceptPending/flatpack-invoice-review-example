@@ -1,8 +1,11 @@
+from collections.abc import Iterable
+
 import bcrypt
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
+from app.roles import format_roles
 
 
 class UserService:
@@ -30,11 +33,13 @@ class UserService:
         email: str,
         password_hash: str,
         is_admin: bool = False,
+        roles: Iterable[str] | None = None,
     ) -> User:
         user = User(
             email=UserService._normalize_email(email),
             password_hash=password_hash,
             is_admin=is_admin,
+            roles=format_roles(roles or ()),
         )
         db.add(user)
         await db.commit()
