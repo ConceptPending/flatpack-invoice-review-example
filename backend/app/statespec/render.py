@@ -9,6 +9,7 @@ layperson-facing viewer (a separate tool/repo).
 
 from __future__ import annotations
 
+from app.statespec import expr as _expr
 from app.statespec.core import StateSpec
 
 
@@ -19,7 +20,7 @@ def to_mermaid(spec: StateSpec) -> str:
     lines = ["stateDiagram-v2", f"    %% {spec.title}", f"    [*] --> {spec.initial}"]
     for t in spec.transitions:
         roles = "/".join(sorted(t.roles)) or "—"
-        guard = f" [{t.guard}]" if t.guard else ""
+        guard = f" [{_expr.render(t.guard)}]" if t.guard else ""
         edge = f"{t.name} ({roles}){guard}"
         for src in t.sources:
             lines.append(f"    {src} --> {t.dest}: {edge}")
@@ -36,7 +37,7 @@ def to_table(spec: StateSpec) -> str:
     ]
     for t in spec.transitions:
         roles = ", ".join(sorted(t.roles)) or "—"
-        guard = t.guard or "—"
+        guard = _expr.render(t.guard) if t.guard else "—"
         frm = ", ".join(t.sources)
         label = f" — {t.label}" if t.label else ""
         rows.append(f"| **{t.name}**{label} | {frm} | {t.dest} | {roles} | {guard} |")
@@ -52,6 +53,7 @@ def to_dict(spec: StateSpec) -> dict:
         "initial": spec.initial,
         "terminal": sorted(spec.terminal),
         "states": [{"id": s, "description": d} for s, d in spec.states.items()],
+        "fields": [{"name": n, "type": t} for n, t in spec.fields.items()],
         "transitions": [
             {
                 "name": t.name,
@@ -59,12 +61,21 @@ def to_dict(spec: StateSpec) -> dict:
                 "from": list(t.sources),
                 "to": t.dest,
                 "roles": sorted(t.roles),
-                "guard": t.guard,
+                # The condition as both a structured tree (for tooling/diff)
+                # and rendered text (for humans).
+                "guard": _expr.to_dict(t.guard) if t.guard else None,
+                "guard_text": _expr.render(t.guard) if t.guard else None,
             }
             for t in spec.transitions
         ],
         "invariants": [
-            {"name": i.name, "label": i.label} for i in spec.invariants
+            {
+                "name": i.name,
+                "label": i.label,
+                "condition": _expr.to_dict(i.condition),
+                "text": _expr.render(i.condition),
+            }
+            for i in spec.invariants
         ],
     }
 
@@ -100,16 +111,16 @@ def to_markdown_doc(spec: StateSpec) -> str:
             "",
             "## Invariants",
             "",
-            "Properties that should hold in every reachable state. The "
-            "property-based test suite (Hypothesis) checks them after every "
-            "transition across randomly generated action sequences. They are "
-            "enforced *transitively* by the guards and transition structure "
-            "above — the engine does not yet evaluate them as independent "
-            "runtime checks, so a mutation made outside a transition is not "
-            "guarded against them:",
+            "Properties that must hold in every reachable state. The engine "
+            "evaluates them against the proposed post-state on every transition "
+            "and refuses the transition if any fails; the property-based suite "
+            "(Hypothesis) also checks them across random action sequences. (A "
+            "mutation made entirely outside a transition is still beyond the "
+            "engine's reach — that is the database-constraint domain.)",
             "",
         ]
         for inv in spec.invariants:
-            parts.append(f"- **{inv.name}** — {inv.label or '(see spec)'}")
+            cond = _expr.render(inv.condition)
+            parts.append(f"- **{inv.name}** (`{cond}`) — {inv.label or '(see spec)'}")
     parts.append("")
     return "\n".join(parts)

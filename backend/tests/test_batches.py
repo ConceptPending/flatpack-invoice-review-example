@@ -214,7 +214,9 @@ async def test_lifecycle_endpoint(client):
     assert data["initial"] == "pending"
     approve = next(t for t in data["transitions"] if t["name"] == "approve")
     assert approve["roles"] == ["approver"]
-    assert approve["guard"] == "no_unresolved_errors"
+    # guard is now a structured expression tree + rendered text
+    assert approve["guard_text"] == "error_count = 0"
+    assert approve["guard"]["kind"] == "compare" and approve["guard"]["op"] == "eq"
 
 
 @pytest.mark.asyncio
