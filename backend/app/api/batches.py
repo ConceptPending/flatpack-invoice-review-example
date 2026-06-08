@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,7 @@ from app.models.user import User
 from app.models.validation_error import ErrorResolution
 from app.schemas.invoice import InvoiceResponse
 from app.schemas.lifecycle import LifecycleSpecResponse
+from app.schemas.lifecycle_event import LifecycleEventResponse
 from app.schemas.review_batch import (
     BatchResponse,
     BatchTransition,
@@ -21,6 +22,7 @@ from app.schemas.validation_error import (
 )
 from app.services.batches import BatchService
 from app.services.csv_parser import SCHEMA_FIELDS, to_csv
+from app.services.lifecycle_events import LifecycleEventService
 from app.services.suppliers import SupplierService
 from app.statespec import (
     IllegalTransition,
@@ -107,10 +109,18 @@ async def get_batch(batch_id: UUID, db: AsyncSession = Depends(get_db)):
     return batch
 
 
+@router.get("/{batch_id}/lifecycle-events", response_model=list[LifecycleEventResponse])
+async def list_lifecycle_events(batch_id: UUID, db: AsyncSession = Depends(get_db)):
+    """The append-only audit trail for a batch: who did what, under which exact
+    policy (spec version + digest), with the structured rule evaluations."""
+    return await LifecycleEventService.list_for_entity(db, "review_batch", batch_id)
+
+
 @router.post("/{batch_id}/transition", response_model=BatchResponse)
 async def transition_batch(
     batch_id: UUID,
     body: BatchTransition,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin),
 ):
@@ -128,13 +138,13 @@ async def transition_batch(
         raise HTTPException(status_code=404, detail="Batch not found")
     try:
         batch = await BatchService.transition(
-            db, batch, body.action, roles_for(admin), actor_id=admin.id
+            db, batch, body.action, roles_for(admin), actor_id=admin.id,
+            request_id=request.headers.get("X-Request-ID"),
         )
     except TransitionError as exc:
         raise HTTPException(
             status_code=_ERROR_STATUS.get(type(exc), 409), detail=str(exc)
         ) from exc
-    # TODO(audit-log-recipe): emit batch.status_changed event.
     return batch
 
 

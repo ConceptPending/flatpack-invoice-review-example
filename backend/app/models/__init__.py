@@ -1,6 +1,7 @@
 from app.models.audit_log import AuditLog
 from app.models.base import Base
 from app.models.invoice import Invoice
+from app.models.lifecycle_event import LifecycleEvent
 from app.models.review_batch import ReviewBatch
 from app.models.supplier import Supplier
 from app.models.user import User
@@ -11,6 +12,7 @@ __all__ = [
     "Base",
     "ErrorResolution",
     "Invoice",
+    "LifecycleEvent",
     "ReviewBatch",
     "Supplier",
     "User",

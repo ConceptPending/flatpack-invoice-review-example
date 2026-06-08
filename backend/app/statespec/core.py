@@ -128,6 +128,19 @@ class Decision:
     error: type[TransitionError] | None = None
 
 
+@dataclass(frozen=True)
+class Evaluation:
+    """Structured evidence that one condition was evaluated during a transition
+    — the audit record's "why was this allowed". `inputs` is just the fields the
+    expression referenced (not the whole entity)."""
+
+    control_id: str
+    kind: str  # "guard" | "invariant"
+    expression: dict  # expr.to_dict — the condition as data
+    result: bool
+    inputs: Mapping[str, object]
+
+
 # --- The single enforcement path -------------------------------------------
 
 
@@ -179,6 +192,68 @@ def _require_fields(spec: StateSpec, ctx: Mapping[str, object]) -> None:
         )
 
 
+def fire(
+    spec: StateSpec,
+    action: str,
+    current_state: str,
+    actor_roles: frozenset[str],
+    entity: Mapping[str, object] | None = None,
+    *,
+    post_overrides: Mapping[str, object] | None = None,
+) -> tuple[str, list[Evaluation]]:
+    """Enforce a transition and return `(dest, evaluations)` — the destination
+    state plus structured evidence of every condition evaluated (the guard and
+    each invariant, with the inputs it read). The single mutation-decision path;
+    `apply` is the dest-only convenience wrapper.
+
+    After the transition is judged legal (action / source / role / guard), the
+    invariants are evaluated against the proposed post-state and the transition
+    is refused (InvariantViolation) if any fails. Proposed post-state is
+    `{**entity, status: dest, **post_overrides}`.
+    """
+    decision = can_fire(spec, action, current_state, actor_roles, entity)
+    if not decision.allowed:
+        assert decision.error is not None
+        raise decision.error(decision.reason)
+    assert decision.dest is not None
+    dest = decision.dest
+    ctx = entity or {}
+    t = spec.transition(action)
+    evaluations: list[Evaluation] = []
+
+    if t.guard is not None:
+        evaluations.append(
+            Evaluation(
+                control_id=t.control_id or t.name,
+                kind="guard",
+                expression=_expr.to_dict(t.guard),
+                result=True,  # can_fire allowed => the guard held
+                inputs={f: ctx[f] for f in t.guard.fields() if f in ctx},
+            )
+        )
+
+    post = {**ctx, "status": dest, **(post_overrides or {})}
+    _require_fields(spec, post)
+    _expr.validate_context(spec.fields, post)  # runtime values match declared types
+    violated: list[str] = []
+    for inv in spec.invariants:
+        ok = bool(inv.condition.evaluate(post))
+        evaluations.append(
+            Evaluation(
+                control_id=inv.control_id or inv.name,
+                kind="invariant",
+                expression=_expr.to_dict(inv.condition),
+                result=ok,
+                inputs={f: post[f] for f in inv.condition.fields() if f in post},
+            )
+        )
+        if not ok:
+            violated.append(inv.name)
+    if violated:
+        raise InvariantViolation(dest, violated)
+    return dest, evaluations
+
+
 def apply(
     spec: StateSpec,
     action: str,
@@ -188,32 +263,12 @@ def apply(
     *,
     post_overrides: Mapping[str, object] | None = None,
 ) -> str:
-    """Enforce a transition and return the destination state, or raise.
-
-    This is the ONLY function the service layer should call to change an
-    entity's lifecycle state. After the transition is judged legal (action /
-    source / role / guard), the spec's invariants are evaluated against the
-    proposed post-state and the transition is refused if any fails.
-
-    The proposed post-state is `{**entity, status: dest, **post_overrides}`. A
-    transition that *sets* a derived field an invariant reads passes it via
-    `post_overrides` (merge-only, so the default keys can't be dropped).
-    """
-    decision = can_fire(spec, action, current_state, actor_roles, entity)
-    if not decision.allowed:
-        assert decision.error is not None
-        raise decision.error(decision.reason)
-    assert decision.dest is not None
-
-    post = {**(entity or {}), "status": decision.dest, **(post_overrides or {})}
-    _require_fields(spec, post)
-    _expr.validate_context(spec.fields, post)  # runtime values match declared types
-    violated = [
-        inv.name for inv in spec.invariants if not inv.condition.evaluate(post)
-    ]
-    if violated:
-        raise InvariantViolation(decision.dest, violated)
-    return decision.dest
+    """Enforce a transition and return the destination state, or raise. The
+    dest-only wrapper around `fire` for callers that don't need the evidence."""
+    dest, _ = fire(
+        spec, action, current_state, actor_roles, entity, post_overrides=post_overrides
+    )
+    return dest
 
 
 def enabled_transitions(

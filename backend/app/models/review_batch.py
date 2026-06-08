@@ -38,3 +38,9 @@ class ReviewBatch(Base, TimestampMixin):
     # Derived counts, cached so list views don't N+1.
     clean_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # Bumped on every lifecycle transition; recorded in the LifecycleEvent
+    # (before/after) and the hook for optimistic concurrency (the next layer).
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )

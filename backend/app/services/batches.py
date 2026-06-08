@@ -17,7 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.invoice import Invoice
 from app.models.review_batch import ReviewBatch
 from app.models.validation_error import ErrorResolution, ValidationError
-from app.statespec import apply
+from app.services.lifecycle_events import LifecycleEventService
+from app.statespec import fire
 from app.statespec.batch_spec import BATCH_SPEC
 from app.services.csv_parser import (
     SCHEMA_FIELDS,
@@ -171,24 +172,46 @@ class BatchService:
         action: str,
         actor_roles: frozenset[str],
         actor_id: UUID,
+        request_id: str | None = None,
     ) -> ReviewBatch:
-        """Fire a named lifecycle transition on a batch.
-
-        All the decision logic — legal from this state, actor permitted, guard
-        holds (no unresolved errors; the approver is not the uploader) — lives
-        in the generic engine's `apply`. This method only supplies the context
-        snapshot and persists the result. `apply` raises a `TransitionError`
-        subclass on refusal; the route maps those to HTTP.
+        """Fire a named lifecycle transition on a batch and record an
+        append-only LifecycleEvent **in the same transaction** — so an approved
+        batch can never exist without a record of who approved it under which
+        policy. Decision logic lives in `fire` (legal state, actor permitted,
+        guard incl. maker-checker, invariants); `fire` raises on refusal and the
+        route maps that to HTTP (no event written on refusal).
         """
+        previous_state = batch.status
+        version_before = batch.version
         snapshot = {
             "status": batch.status,
             "error_count": batch.error_count,
             "actor_id": actor_id,
             "uploaded_by_id": batch.uploaded_by_id,
         }
-        new_state = apply(BATCH_SPEC, action, batch.status, actor_roles, snapshot)
+        new_state, evaluations = fire(
+            BATCH_SPEC, action, batch.status, actor_roles, snapshot
+        )
         batch.status = new_state
-        await db.commit()
+        batch.version = version_before + 1
+        t = BATCH_SPEC.transition(action)
+        LifecycleEventService.record(
+            db,
+            entity_type="review_batch",
+            entity_id=batch.id,
+            action=action,
+            transition_control_id=(t.control_id or action),
+            previous_state=previous_state,
+            new_state=new_state,
+            actor_id=actor_id,
+            actor_roles=list(actor_roles),
+            spec=BATCH_SPEC,
+            evaluations=evaluations,
+            entity_version_before=version_before,
+            entity_version_after=batch.version,
+            request_id=request_id,
+        )
+        await db.commit()  # entity update + event commit atomically
         await db.refresh(batch)
         return batch
 
