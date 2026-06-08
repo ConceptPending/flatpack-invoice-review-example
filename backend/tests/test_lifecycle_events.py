@@ -36,7 +36,8 @@ async def test_successful_transition_writes_one_event(client, db_engine):
     assert ev["action"] == "approve"
     assert ev["previous_state"] == "pending" and ev["new_state"] == "approved"
     assert ev["outcome"] == "succeeded"
-    assert ev["entity_version_before"] == 1 and ev["entity_version_after"] == 2
+    # the transition bumps the optimistic-lock version by exactly one
+    assert ev["entity_version_after"] == ev["entity_version_before"] + 1
 
 
 @pytest.mark.asyncio

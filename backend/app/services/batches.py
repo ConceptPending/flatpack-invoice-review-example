@@ -13,21 +13,28 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.models.invoice import Invoice
 from app.models.review_batch import ReviewBatch
 from app.models.validation_error import ErrorResolution, ValidationError
-from app.services.lifecycle_events import LifecycleEventService
-from app.statespec import fire
-from app.statespec.batch_spec import BATCH_SPEC
 from app.services.csv_parser import (
     SCHEMA_FIELDS,
     apply_mapping,
     auto_map,
     parse_csv,
 )
+from app.services.lifecycle_events import LifecycleEventService
 from app.services.suppliers import SupplierService
 from app.services.validation import normalise_currency, validate_row
+from app.statespec import fire
+from app.statespec.batch_spec import BATCH_SPEC
+
+
+class TransitionConflict(Exception):
+    """Another transition changed the batch concurrently (optimistic-lock
+    version mismatch). The caller should reload and retry; the route maps it
+    to HTTP 409."""
 
 
 class BatchService:
@@ -166,6 +173,22 @@ class BatchService:
         return await db.get(ReviewBatch, batch_id)
 
     @staticmethod
+    async def unresolved_error_count(db: AsyncSession, batch_id: UUID) -> int:
+        """Count unresolved ValidationError rows — the *authoritative* fact the
+        approval guard is evaluated against, derived in the transaction rather
+        than trusting the cached `error_count` (which a bug or direct edit could
+        drift)."""
+        result = await db.execute(
+            select(func.count())
+            .select_from(ValidationError)
+            .where(
+                ValidationError.batch_id == batch_id,
+                ValidationError.resolution == ErrorResolution.unresolved,
+            )
+        )
+        return int(result.scalar_one())
+
+    @staticmethod
     async def transition(
         db: AsyncSession,
         batch: ReviewBatch,
@@ -183,17 +206,18 @@ class BatchService:
         """
         previous_state = batch.status
         version_before = batch.version
+        entity_id = batch.id  # captured now; a rollback would expire the object
         snapshot = {
             "status": batch.status,
-            "error_count": batch.error_count,
+            # Authoritative: count live unresolved-error rows, not the cache.
+            "error_count": await BatchService.unresolved_error_count(db, batch.id),
             "actor_id": actor_id,
             "uploaded_by_id": batch.uploaded_by_id,
         }
         new_state, evaluations = fire(
             BATCH_SPEC, action, batch.status, actor_roles, snapshot
         )
-        batch.status = new_state
-        batch.version = version_before + 1
+        batch.status = new_state  # version_id_col bumps `version` on flush
         t = BATCH_SPEC.transition(action)
         LifecycleEventService.record(
             db,
@@ -208,10 +232,20 @@ class BatchService:
             spec=BATCH_SPEC,
             evaluations=evaluations,
             entity_version_before=version_before,
-            entity_version_after=batch.version,
+            entity_version_after=version_before + 1,  # version_id_col bumps to this
             request_id=request_id,
         )
-        await db.commit()  # entity update + event commit atomically
+        try:
+            # Atomic: the batch UPDATE (guarded by WHERE version=version_before)
+            # and the event INSERT commit together. A concurrent transition that
+            # already bumped the version makes this UPDATE match 0 rows.
+            await db.commit()
+        except StaleDataError as exc:
+            await db.rollback()
+            raise TransitionConflict(
+                f"batch {entity_id} changed concurrently (expected version "
+                f"{version_before})"
+            ) from exc
         await db.refresh(batch)
         return batch
 
