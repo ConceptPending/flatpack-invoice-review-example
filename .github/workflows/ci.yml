@@ -30,6 +30,13 @@ jobs:
         run: ruff check app/ tests/
       - name: Tests
         run: PYTHONPATH=. pytest -q
+      - name: State-machine specs are well-formed
+        run: DEBUG=true PYTHONPATH=. python scripts/statespec.py check
+      - name: Lifecycle docs are in sync with the specs
+        run: |
+          DEBUG=true PYTHONPATH=. python scripts/statespec.py render
+          git diff --exit-code ../docs/specs/ \
+            || (echo "::error::docs/specs/ is stale — run 'make spec-doc' and commit." && exit 1)
 
   test-frontend:
     name: Frontend — typecheck, lint, tests, build

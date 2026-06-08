@@ -1,18 +1,18 @@
-from io import StringIO
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.deps import get_current_admin
+from app.deps import get_current_admin, roles_for
 from app.models.user import User
 from app.models.validation_error import ErrorResolution
 from app.schemas.invoice import InvoiceResponse
+from app.schemas.lifecycle import LifecycleSpecResponse
 from app.schemas.review_batch import (
     BatchResponse,
-    BatchStatusUpdate,
+    BatchTransition,
     UploadResult,
 )
 from app.schemas.validation_error import (
@@ -22,12 +22,28 @@ from app.schemas.validation_error import (
 from app.services.batches import BatchService
 from app.services.csv_parser import SCHEMA_FIELDS, to_csv
 from app.services.suppliers import SupplierService
+from app.statespec import (
+    IllegalTransition,
+    PermissionDenied,
+    TransitionError,
+    UnknownAction,
+)
+from app.statespec.batch_spec import BATCH_SPEC
+from app.statespec.render import to_dict
 
 router = APIRouter(
     prefix="/api/admin/batches",
     tags=["batches"],
     dependencies=[Depends(get_current_admin)],
 )
+
+# Map each enforcement error to the right HTTP status (guard rejection — e.g.
+# unresolved errors — falls through to 409).
+_ERROR_STATUS: dict[type[TransitionError], int] = {
+    UnknownAction: 422,
+    IllegalTransition: 409,
+    PermissionDenied: 403,
+}
 
 
 @router.post("", response_model=UploadResult, status_code=201)
@@ -75,6 +91,14 @@ async def list_batches(db: AsyncSession = Depends(get_db)):
     return await BatchService.list_recent(db)
 
 
+@router.get("/lifecycle", response_model=LifecycleSpecResponse)
+async def get_lifecycle():
+    """The batch review lifecycle as data — states, transitions, who-can-do-
+    what, and the always-true guarantees. Read-only. Declared before the
+    `/{batch_id}` route so the literal path isn't captured as an id."""
+    return to_dict(BATCH_SPEC)
+
+
 @router.get("/{batch_id}", response_model=BatchResponse)
 async def get_batch(batch_id: UUID, db: AsyncSession = Depends(get_db)):
     batch = await BatchService.get(db, batch_id)
@@ -83,21 +107,32 @@ async def get_batch(batch_id: UUID, db: AsyncSession = Depends(get_db)):
     return batch
 
 
-@router.patch("/{batch_id}/status", response_model=BatchResponse)
-async def set_batch_status(
+@router.post("/{batch_id}/transition", response_model=BatchResponse)
+async def transition_batch(
     batch_id: UUID,
-    body: BatchStatusUpdate,
+    body: BatchTransition,
     db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
 ):
-    """Move the batch through its lifecycle.
+    """Move the batch through its review lifecycle by firing a named action
+    (`approve`, `reject`). Legality, permission, and the no-open-errors guard
+    are enforced by the state-machine engine; this handler just looks up the
+    batch, supplies the actor's roles, and maps a refusal to an HTTP status.
 
-    The two-step recipe walk (audit-log on every transition) is a TODO
-    here — see backend/app/models/audit_log.py for the stub.
+    The two-step recipe walk (audit-log on every transition) is a TODO here —
+    see backend/app/models/audit_log.py for the stub.
     """
     batch = await BatchService.get(db, batch_id)
     if batch is None:
         raise HTTPException(status_code=404, detail="Batch not found")
-    batch = await BatchService.set_status(db, batch, body.status)
+    try:
+        batch = await BatchService.transition(
+            db, batch, body.action, roles_for(admin)
+        )
+    except TransitionError as exc:
+        raise HTTPException(
+            status_code=_ERROR_STATUS.get(type(exc), 409), detail=str(exc)
+        ) from exc
     # TODO(audit-log-recipe): emit batch.status_changed event.
     return batch
 

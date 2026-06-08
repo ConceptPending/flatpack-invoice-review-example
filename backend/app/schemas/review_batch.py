@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.review_batch import BatchStatus
 
@@ -19,8 +19,10 @@ class BatchResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class BatchStatusUpdate(BaseModel):
-    status: BatchStatus
+class BatchTransition(BaseModel):
+    # The lifecycle action to fire (e.g. "approve"). Validated against the
+    # spec by the engine, not here — one source of truth.
+    action: str = Field(min_length=1)
 
 
 class UploadResult(BaseModel):

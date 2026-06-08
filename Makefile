@@ -1,4 +1,4 @@
-.PHONY: dev dev-backend dev-frontend db migrate lint install install-hooks generate-client stop restart verify-promotion
+.PHONY: dev dev-backend dev-frontend db migrate lint install install-hooks generate-client stop restart verify-promotion spec-check spec-doc
 
 # Start everything
 dev:
@@ -46,6 +46,14 @@ test-backend:
 
 test-frontend:
 	cd frontend && npx vitest run
+
+# Validate the state-machine specs are well-formed (lifecycle recipe).
+spec-check:
+	cd backend && DEBUG=true PYTHONPATH=. python scripts/statespec.py check
+
+# Regenerate docs/specs/*.md from the specs (committed; CI checks freshness).
+spec-doc:
+	cd backend && DEBUG=true PYTHONPATH=. python scripts/statespec.py render
 
 # Stop all services
 stop:
