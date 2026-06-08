@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.invoice import Invoice
-from app.models.review_batch import BatchStatus, ReviewBatch
+from app.models.review_batch import ReviewBatch
 from app.models.validation_error import ErrorResolution, ValidationError
 from app.statespec import apply
 from app.statespec.batch_spec import BATCH_SPEC
@@ -56,7 +56,7 @@ class BatchService:
         batch = ReviewBatch(
             uploaded_by_id=uploaded_by_id,
             source_filename=source_filename,
-            status=BatchStatus.pending,
+            status=BATCH_SPEC.initial,
             clean_count=0,
             error_count=0,
         )
@@ -179,11 +179,9 @@ class BatchService:
         the guard reads and persists the result. `apply` raises a
         `TransitionError` subclass on refusal; the route maps those to HTTP.
         """
-        snapshot = {"status": batch.status.value, "error_count": batch.error_count}
-        new_state = apply(
-            BATCH_SPEC, action, batch.status.value, actor_roles, snapshot
-        )
-        batch.status = BatchStatus(new_state)
+        snapshot = {"status": batch.status, "error_count": batch.error_count}
+        new_state = apply(BATCH_SPEC, action, batch.status, actor_roles, snapshot)
+        batch.status = new_state
         await db.commit()
         await db.refresh(batch)
         return batch

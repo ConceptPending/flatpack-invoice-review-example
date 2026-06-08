@@ -28,8 +28,11 @@ status but not approval status — they inherit the batch's.
 
 **Answer:** Not at v1. Defer.
 
-**Implication:** Two roles only — admin and reviewer. Add `Reporter`
-later when the audit log gets a non-admin viewer.
+**Implication:** No read-only `Reporter` accounts at v1. (Update: when
+the lifecycle-state-machine recipe was applied, the batch workflow gained
+per-user lifecycle roles — `reviewer` and `approver` — on top of the
+`is_admin` gate; see `app/roles.py` and `app/statespec/batch_spec.py`.
+`Reporter` remains deferred until the audit log gets a non-admin viewer.)
 
 ## 4. Allow override of duplicate detection?
 

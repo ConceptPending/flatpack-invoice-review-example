@@ -21,6 +21,35 @@ ALL_ROLES = frozenset(ROLES)
 
 def test_spec_is_well_formed():
     assert core.validate(BATCH_SPEC) == []
+    # ...and clean against the real role catalogue.
+    from app.roles import ALL_ROLES as CATALOGUE
+
+    assert core.validate(BATCH_SPEC, known_roles=CATALOGUE) == []
+
+
+def test_validate_catches_misspelled_role_and_duplicate_action():
+    from app.statespec.core import StateSpec, Transition
+
+    # A role not in the catalogue (e.g. a typo) — would be un-grantable, so the
+    # transition could never fire; validate must flag it.
+    typo = StateSpec(
+        name="x", title="x", states={"a": "", "b": ""}, initial="a",
+        terminal=frozenset({"b"}),
+        transitions=(Transition("go", ("a",), "b", roles=frozenset({"aprover"})),),
+    )
+    problems = core.validate(typo, known_roles=frozenset({"approver"}))
+    assert any("not in the catalogue" in p for p in problems)
+
+    # Duplicate action name.
+    dup = StateSpec(
+        name="y", title="y", states={"a": "", "b": ""}, initial="a",
+        terminal=frozenset({"b"}),
+        transitions=(
+            Transition("go", ("a",), "b", roles=frozenset({"r"})),
+            Transition("go", ("a",), "b", roles=frozenset({"r"})),
+        ),
+    )
+    assert any("duplicate transition name" in p for p in core.validate(dup))
 
 
 def test_separation_of_duties_in_spec():
@@ -84,13 +113,13 @@ class BatchLifecycleMachine(RuleBasedStateMachine):
                 core.apply(BATCH_SPEC, action, self.state, roles, self._entity())
 
     @invariant()
-    def status_is_declared(self):
-        assert self.state in BATCH_SPEC.states
-
-    @invariant()
-    def approved_batches_are_clean(self):
-        if self.state == "approved":
-            assert self.error_count == 0
+    def spec_invariants_hold(self):
+        # Generic: run every invariant predicate declared in the spec after
+        # each step, rather than restating them here (so the test can't drift
+        # from the spec's stated guarantees).
+        snap = self._entity()
+        for inv in BATCH_SPEC.invariants:
+            assert inv.predicate(snap), f"invariant {inv.name!r} violated at {snap}"
 
     @invariant()
     def terminals_are_sinks(self):

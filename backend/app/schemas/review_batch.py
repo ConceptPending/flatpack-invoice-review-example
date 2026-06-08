@@ -3,14 +3,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.models.review_batch import BatchStatus
-
 
 class BatchResponse(BaseModel):
     id: UUID
     uploaded_by_id: UUID
     source_filename: str
-    status: BatchStatus
+    # The lifecycle state, governed by app/statespec/batch_spec.py.
+    status: str
     clean_count: int
     error_count: int
     created_at: datetime

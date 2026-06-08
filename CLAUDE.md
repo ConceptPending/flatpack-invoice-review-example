@@ -38,7 +38,16 @@ make stop                         # kill dev servers + Docker
 
 ## Adding a new domain model
 
-`README.md` has a 10-step recipe under "Adding a new domain model". Follow it literally — model → register → migrate → schemas → service → routes → router include → TS type → API client → pages. The existing `Item` slice is the canonical reference.
+`README.md` (in upstream Baseplate) has a 10-step recipe — model → register → migrate → schemas → service → routes → router include → TS type → API client → pages. This repo is **backend-only**, so the frontend steps don't apply; the canonical references here are the promoted slices: `Invoice`, `Supplier`, `ReviewBatch`, `ValidationError` (`app/models/`, `app/services/batches.py`, `app/api/batches.py`).
+
+## Lifecycle (state machine)
+
+`ReviewBatch` moves through a **declarative lifecycle**, applying upstream Baseplate's [`lifecycle-state-machine`](https://github.com/ConceptPending/baseplate/blob/main/docs/recipes/lifecycle-state-machine.md) recipe rather than a free-form status setter:
+
+- The spec is `app/statespec/batch_spec.py` (states + role-gated, guarded transitions). The generic engine `app/statespec/core.py` is the **only** place a transition happens — `BatchService.transition()` calls `statespec.apply()`; never assign `batch.status` directly.
+- `status` is a plain string; the spec is the single source of truth for legal values (no DB enum to keep in sync).
+- Roles are per-user (`User.roles`, vocabulary in `app/roles.py`); `deps.roles_for()` returns them. Only `approver` may approve; a batch with unresolved validation errors can't be approved (the `no_unresolved_errors` guard).
+- `make spec-check` (CI) validates the spec; `make spec-doc` regenerates `docs/specs/batch-lifecycle.md` (CI fails if stale). `tests/test_batch_statespec.py` is the Hypothesis conformance suite.
 
 ## Gotchas
 
@@ -47,7 +56,7 @@ make stop                         # kill dev servers + Docker
 - **Cookies require HTTPS in prod** (`COOKIE_SECURE=true`). Set `COOKIE_SECURE=false` for local HTTP dev.
 - **`/docs` and `/redoc`** are disabled when `DEBUG=false`. Enable with `DEBUG=true`.
 - **Backend tests use SQLite via aiosqlite** (`tests/conftest.py:14`). Don't add Postgres-specific SQL to models without verifying the migration still runs under SQLite — or update conftest to use Postgres.
-- **Test auth helper**: `tests/test_items.py:4` `_login()` — copy this pattern in new test files that hit admin endpoints.
+- **Test auth helper**: `tests/test_batches.py` `_login()` — copy this pattern in new test files that hit admin endpoints.
 - **Vitest uses happy-dom** (not jsdom) for the DOM environment. Component tests with `@testing-library/react` work — see `__tests__/Button.test.tsx` for a template. Cleanup is registered in `__tests__/setup.ts`.
 
 ## Patterns to avoid
@@ -77,4 +86,4 @@ When you see these in the codebase, fix them rather than copy:
 - The backend issues a `csrf_token` cookie (non-HttpOnly, JS-readable) on login and via `GET /api/auth/csrf`.
 - The frontend's `fetchAPI` wrapper (`lib/api.ts`) reads the cookie via `lib/csrf.ts:getCSRFToken()` and auto-attaches `X-CSRF-Token` on writes. Don't bypass `fetchAPI` for writes — calling `fetch()` directly will get 403'd.
 - Token check uses `secrets.compare_digest` (constant-time).
-- When testing writes, log in first and pass the returned csrf token in the header (`tests/test_items.py:_login` is the canonical pattern).
+- When testing writes, log in first and pass the returned csrf token in the header (`tests/test_batches.py:_login` is the canonical pattern).

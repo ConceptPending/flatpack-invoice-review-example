@@ -1,20 +1,11 @@
-import enum
 import uuid
 
-from sqlalchemy import Enum, ForeignKey, Integer, String
+from sqlalchemy import ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, uuid_pk
-
-
-class BatchStatus(str, enum.Enum):
-    """ReviewBatch lifecycle. Mirrors the public-submission-and-admin-queue
-    recipe's pending/approved/rejected pattern."""
-
-    pending = "pending"
-    approved = "approved"
-    rejected = "rejected"
+from app.statespec.batch_spec import BATCH_SPEC
 
 
 class ReviewBatch(Base, TimestampMixin):
@@ -32,9 +23,14 @@ class ReviewBatch(Base, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
     source_filename: Mapped[str] = mapped_column(String(255))
-    status: Mapped[BatchStatus] = mapped_column(
-        Enum(BatchStatus, name="batch_status"),
-        default=BatchStatus.pending,
+    # Plain string, not a DB enum: app/statespec/batch_spec.py is the single
+    # source of truth for the legal values and the transitions between them
+    # (the engine keeps the column within the spec). Adding a state is a
+    # spec change, not a database-enum migration.
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=BATCH_SPEC.initial,
+        server_default=BATCH_SPEC.initial,
         nullable=False,
         index=True,
     )

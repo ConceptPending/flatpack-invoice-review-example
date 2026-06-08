@@ -98,11 +98,15 @@ def to_markdown_doc(spec: StateSpec) -> str:
     if spec.invariants:
         parts += [
             "",
-            "## Guarantees that always hold",
+            "## Invariants",
             "",
-            "These invariants are checked after *every* transition by the "
-            "property-based test suite (Hypothesis), across randomly generated "
-            "sequences of actions:",
+            "Properties that should hold in every reachable state. The "
+            "property-based test suite (Hypothesis) checks them after every "
+            "transition across randomly generated action sequences. They are "
+            "enforced *transitively* by the guards and transition structure "
+            "above — the engine does not yet evaluate them as independent "
+            "runtime checks, so a mutation made outside a transition is not "
+            "guarded against them:",
             "",
         ]
         for inv in spec.invariants:

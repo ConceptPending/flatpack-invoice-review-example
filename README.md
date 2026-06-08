@@ -122,8 +122,8 @@ make dev                     # backend on :8001
                              # frontend on :3001 (still serving the
                              # template Item UI — see "Out of scope")
 
-make verify-promotion        # 10 OK, 0 miss, 0 warn — the bridge proof
-make test-backend            # 33 tests pass
+make verify-promotion        # 33 OK, 1 miss, 1 warn — see "What the verifier still flags"
+make test-backend            # tests pass (see CI for the current count)
 ```
 
 `make verify-promotion` runs `backend/scripts/verify_promotion.py
