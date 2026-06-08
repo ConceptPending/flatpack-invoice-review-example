@@ -10,37 +10,21 @@ spec makes three rules real and enforced in one place:
   batch).
 - **Separation of duties.** A `reviewer` can reject; only an `approver` can
   approve a batch for downstream processing.
-- **No approval with open errors.** The `no_unresolved_errors` guard refuses to
-  approve a batch that still has unresolved validation errors — so the
-  invariant "an approved batch is clean" holds for every code path.
+- **No approval with open errors.** The `approve` guard refuses to approve a
+  batch that still has unresolved validation errors, so the invariant "an
+  approved batch is clean" holds for every code path.
 
-The guard reads `error_count` from a snapshot the service supplies, keeping the
-predicate pure.
+Guards and invariants are declarative expressions (app/statespec/expr.py): they
+read `status`/`error_count` from the context snapshot the service supplies.
 """
 
 from __future__ import annotations
 
-from typing import Mapping
-
 from app.roles import APPROVER, REVIEWER
 from app.statespec.core import Invariant, StateSpec, Transition
+from app.statespec.expr import any_, field
 
 __all__ = ["BATCH_SPEC"]
-
-
-def _no_unresolved_errors(entity: Mapping[str, object]) -> bool:
-    return int(entity.get("error_count", 0) or 0) == 0
-
-
-def _status_declared(e: Mapping[str, object]) -> bool:
-    return e.get("status") in _STATES
-
-
-def _approved_implies_clean(e: Mapping[str, object]) -> bool:
-    if e.get("status") == "approved":
-        return int(e.get("error_count", 0) or 0) == 0
-    return True
-
 
 _STATES = {
     "pending": "Uploaded and awaiting review.",
@@ -53,16 +37,17 @@ BATCH_SPEC = StateSpec(
     name="batch",
     title="Batch review lifecycle",
     states=_STATES,
+    # Context contract — what a service snapshot must provide.
+    fields={"status": "str", "error_count": "int"},
     initial="pending",
     terminal=frozenset({"approved", "rejected"}),
-    guards={"no_unresolved_errors": _no_unresolved_errors},
     transitions=(
         Transition(
             name="approve",
             sources=("pending",),
             dest="approved",
             roles=frozenset({APPROVER}),
-            guard="no_unresolved_errors",
+            guard=field("error_count").eq(0),
             label="Approve the batch (only when every validation error is resolved).",
         ),
         Transition(
@@ -76,12 +61,12 @@ BATCH_SPEC = StateSpec(
     invariants=(
         Invariant(
             "status_declared",
-            _status_declared,
+            field("status").is_in(tuple(_STATES)),
             "The status is always one of the declared states.",
         ),
         Invariant(
             "approved_implies_clean",
-            _approved_implies_clean,
+            any_(field("status").ne("approved"), field("error_count").eq(0)),
             "An approved batch has no unresolved validation errors.",
         ),
     ),

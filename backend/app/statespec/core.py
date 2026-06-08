@@ -10,22 +10,18 @@ random sequences) stand in as a correctness proof for *every* spec.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, field
-from typing import Callable, Mapping
+from dataclasses import dataclass
+from typing import Mapping
+
+from app.statespec import expr as _expr
+from app.statespec.expr import ExpressionError  # re-export for callers
 
 
 # --- Data model -------------------------------------------------------------
 #
-# Guards and invariants are referenced by *name* from the spec and resolved to
-# callables at enforcement time. This keeps the spec itself serialisable (a
-# future layperson-facing viewer can read it without importing Python) while
-# the predicates live in code next to the domain they describe.
-
-# A guard answers: "given this entity's data, may the transition proceed?"
-GuardFn = Callable[[Mapping[str, object]], bool]
-# An invariant answers: "is the entity still internally consistent?" It is
-# checked after every transition and must hold in every reachable state.
-InvariantFn = Callable[[Mapping[str, object]], bool]
+# Guards and invariants are declarative expressions (see app/statespec/expr.py)
+# — pure data, so the whole StateSpec serialises, renders, and diffs. The same
+# object evaluates at runtime, so the rendered policy *is* the enforced policy.
 
 
 @dataclass(frozen=True)
@@ -38,8 +34,8 @@ class Transition:
     # Roles permitted to fire this transition. Empty = no one (a deliberate
     # dead edge is a spec error; `validate` flags it).
     roles: frozenset[str] = frozenset()
-    # Optional named guard predicate that must return True to proceed.
-    guard: str | None = None
+    # Optional guard expression that must evaluate True against the context.
+    guard: object | None = None  # an expr condition (Compare/All/Any/Not/Opaque)
     # Plain-English description for the human-readable render.
     label: str = ""
 
@@ -47,22 +43,25 @@ class Transition:
 @dataclass(frozen=True)
 class Invariant:
     name: str
-    predicate: InvariantFn
+    condition: object  # an expr condition; must hold in every reachable state
     label: str = ""
 
 
 @dataclass(frozen=True)
 class StateSpec:
-    """A complete lifecycle: states, transitions, guards, invariants."""
+    """A complete lifecycle: states, the context field schema, transitions,
+    and invariants."""
 
     name: str
     title: str
     # state id -> human description
     states: Mapping[str, str]
+    # context field name -> type tag (the contract a service snapshot must
+    # satisfy; the basis for validate's field/type checks). See expr.TYPE_TAGS.
+    fields: Mapping[str, str]
     initial: str
     terminal: frozenset[str]
     transitions: tuple[Transition, ...]
-    guards: Mapping[str, GuardFn] = field(default_factory=dict)
     invariants: tuple[Invariant, ...] = ()
 
     def transition(self, action: str) -> Transition | None:
@@ -93,6 +92,23 @@ class PermissionDenied(TransitionError):
 
 class GuardRejected(TransitionError):
     """The action's guard predicate returned False for this entity."""
+
+
+class InvariantViolation(Exception):
+    """A transition would produce a state that violates a declared invariant.
+
+    Deliberately NOT a TransitionError: invariants are *consequences* of guards
+    (a backstop), so this can only fire from a guard/spec bug or an out-of-band
+    mutation. It maps to HTTP 500 (an internal breach of a stated guarantee),
+    not a client 4xx. Any client-visible rule must be a guard, never a
+    standalone invariant."""
+
+    def __init__(self, dest: str, violated: list[str]):
+        self.dest = dest
+        self.violated = violated
+        super().__init__(
+            f"transition into {dest!r} would violate invariant(s): {violated}"
+        )
 
 
 @dataclass(frozen=True)
@@ -137,18 +153,23 @@ def can_fire(
             error=PermissionDenied,
         )
     if t.guard is not None:
-        guard = spec.guards.get(t.guard)
-        if guard is None:
-            # A spec that references a missing guard is a programming error,
-            # not a runtime refusal — surface it loudly.
-            raise KeyError(f"spec {spec.name!r} references unknown guard {t.guard!r}")
-        if not guard(entity or {}):
+        # The guard is an expr condition. A malformed guard / missing context
+        # field raises ExpressionError (a contract bug) rather than a refusal.
+        if not t.guard.evaluate(entity or {}):
             return Decision(
                 False,
-                reason=f"guard {t.guard!r} rejected {action!r}",
+                reason=f"guard {_expr.render(t.guard)} rejected {action!r}",
                 error=GuardRejected,
             )
     return Decision(True, dest=t.dest, reason="ok")
+
+
+def _require_fields(spec: StateSpec, ctx: Mapping[str, object]) -> None:
+    missing = set(spec.fields) - set(ctx)
+    if missing:
+        raise ExpressionError(
+            f"context for {spec.name!r} is missing field(s): {sorted(missing)}"
+        )
 
 
 def apply(
@@ -157,18 +178,33 @@ def apply(
     current_state: str,
     actor_roles: frozenset[str],
     entity: Mapping[str, object] | None = None,
+    *,
+    post_overrides: Mapping[str, object] | None = None,
 ) -> str:
     """Enforce a transition and return the destination state, or raise.
 
     This is the ONLY function the service layer should call to change an
-    entity's lifecycle state. Routing every change through one generic
-    interpreter is what makes the spec authoritative.
+    entity's lifecycle state. After the transition is judged legal (action /
+    source / role / guard), the spec's invariants are evaluated against the
+    proposed post-state and the transition is refused if any fails.
+
+    The proposed post-state is `{**entity, status: dest, **post_overrides}`. A
+    transition that *sets* a derived field an invariant reads passes it via
+    `post_overrides` (merge-only, so the default keys can't be dropped).
     """
     decision = can_fire(spec, action, current_state, actor_roles, entity)
     if not decision.allowed:
         assert decision.error is not None
         raise decision.error(decision.reason)
     assert decision.dest is not None
+
+    post = {**(entity or {}), "status": decision.dest, **(post_overrides or {})}
+    _require_fields(spec, post)
+    violated = [
+        inv.name for inv in spec.invariants if not inv.condition.evaluate(post)
+    ]
+    if violated:
+        raise InvariantViolation(decision.dest, violated)
     return decision.dest
 
 
@@ -227,8 +263,9 @@ def validate(
     A well-formed spec has: a declared initial state; declared, terminal-only
     sink states; every state reachable from initial; every non-terminal state
     able to reach some terminal (no traps); unique transition + invariant
-    names; and no transition referencing an undeclared state, an empty role
-    set, or a missing guard.
+    names; valid field-schema type tags; and guard/invariant expressions that
+    type-check against the field schema (every referenced field declared, every
+    comparison type-compatible, every opaque registered).
 
     If `known_roles` is supplied (the application's role catalogue), every
     transition's roles must be drawn from it — this catches a misspelled role
@@ -243,6 +280,10 @@ def validate(
     for term in spec.terminal:
         if term not in states:
             problems.append(f"terminal state {term!r} is not declared")
+
+    for fname, tag in spec.fields.items():
+        if tag not in _expr.TYPE_TAGS:
+            problems.append(f"field {fname!r} has unknown type tag {tag!r}")
 
     seen_actions: set[str] = set()
     for t in spec.transitions:
@@ -266,16 +307,21 @@ def validate(
                 f"transition {t.name!r} references role(s) not in the catalogue: "
                 f"{sorted(t.roles - known_roles)}"
             )
-        if t.guard is not None and t.guard not in spec.guards:
-            problems.append(
-                f"transition {t.name!r} references unknown guard {t.guard!r}"
-            )
+        if t.guard is not None:
+            problems += [
+                f"transition {t.name!r} guard: {p}"
+                for p in _expr.typecheck(t.guard, spec.fields)
+            ]
 
     seen_invariants: set[str] = set()
     for inv in spec.invariants:
         if inv.name in seen_invariants:
             problems.append(f"duplicate invariant name {inv.name!r}")
         seen_invariants.add(inv.name)
+        problems += [
+            f"invariant {inv.name!r}: {p}"
+            for p in _expr.typecheck(inv.condition, spec.fields)
+        ]
 
     reachable = reachable_states(spec)
     for s in states - reachable:

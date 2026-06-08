@@ -8,7 +8,7 @@
 stateDiagram-v2
     %% Batch review lifecycle
     [*] --> pending
-    pending --> approved: approve (approver) [no_unresolved_errors]
+    pending --> approved: approve (approver) [error_count = 0]
     pending --> rejected: reject (approver/reviewer)
     approved --> [*]
     rejected --> [*]
@@ -26,12 +26,12 @@ stateDiagram-v2
 
 | Action | From | To | Who may do it | Condition |
 | --- | --- | --- | --- | --- |
-| **approve** — Approve the batch (only when every validation error is resolved). | pending | approved | approver | no_unresolved_errors |
+| **approve** — Approve the batch (only when every validation error is resolved). | pending | approved | approver | error_count = 0 |
 | **reject** — Reject the batch (final). | pending | rejected | approver, reviewer | — |
 
 ## Invariants
 
-Properties that should hold in every reachable state. The property-based test suite (Hypothesis) checks them after every transition across randomly generated action sequences. They are enforced *transitively* by the guards and transition structure above — the engine does not yet evaluate them as independent runtime checks, so a mutation made outside a transition is not guarded against them:
+Properties that must hold in every reachable state. The engine evaluates them against the proposed post-state on every transition and refuses the transition if any fails; the property-based suite (Hypothesis) also checks them across random action sequences. (A mutation made entirely outside a transition is still beyond the engine's reach — that is the database-constraint domain.)
 
-- **status_declared** — The status is always one of the declared states.
-- **approved_implies_clean** — An approved batch has no unresolved validation errors.
+- **status_declared** (`status ∈ {"pending", "approved", "rejected"}`) — The status is always one of the declared states.
+- **approved_implies_clean** (`(status ≠ "approved" or error_count = 0)`) — An approved batch has no unresolved validation errors.

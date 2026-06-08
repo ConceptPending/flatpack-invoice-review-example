@@ -33,7 +33,7 @@ def test_validate_catches_misspelled_role_and_duplicate_action():
     # A role not in the catalogue (e.g. a typo) — would be un-grantable, so the
     # transition could never fire; validate must flag it.
     typo = StateSpec(
-        name="x", title="x", states={"a": "", "b": ""}, initial="a",
+        name="x", title="x", states={"a": "", "b": ""}, fields={}, initial="a",
         terminal=frozenset({"b"}),
         transitions=(Transition("go", ("a",), "b", roles=frozenset({"aprover"})),),
     )
@@ -42,7 +42,7 @@ def test_validate_catches_misspelled_role_and_duplicate_action():
 
     # Duplicate action name.
     dup = StateSpec(
-        name="y", title="y", states={"a": "", "b": ""}, initial="a",
+        name="y", title="y", states={"a": "", "b": ""}, fields={}, initial="a",
         terminal=frozenset({"b"}),
         transitions=(
             Transition("go", ("a",), "b", roles=frozenset({"r"})),
@@ -74,7 +74,8 @@ def test_approve_blocked_by_open_errors():
 
 def test_renders():
     assert "pending --> approved" in render.to_mermaid(BATCH_SPEC)
-    assert "no_unresolved_errors" in render.to_table(BATCH_SPEC)
+    # the table shows the rendered guard expression, not a guard name
+    assert "error_count = 0" in render.to_table(BATCH_SPEC)
 
 
 class BatchLifecycleMachine(RuleBasedStateMachine):
@@ -119,7 +120,7 @@ class BatchLifecycleMachine(RuleBasedStateMachine):
         # from the spec's stated guarantees).
         snap = self._entity()
         for inv in BATCH_SPEC.invariants:
-            assert inv.predicate(snap), f"invariant {inv.name!r} violated at {snap}"
+            assert inv.condition.evaluate(snap), f"invariant {inv.name!r} violated at {snap}"
 
     @invariant()
     def terminals_are_sinks(self):
