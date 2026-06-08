@@ -200,6 +200,7 @@ def apply(
 
     post = {**(entity or {}), "status": decision.dest, **(post_overrides or {})}
     _require_fields(spec, post)
+    _expr.validate_context(spec.fields, post)  # runtime values match declared types
     violated = [
         inv.name for inv in spec.invariants if not inv.condition.evaluate(post)
     ]

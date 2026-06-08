@@ -438,3 +438,36 @@ def _compatible(a: str, b: str) -> bool:
 def _comparable(a: str, b: str) -> bool:
     """Ordering: both numeric, or both date."""
     return ({a, b} <= _NUMERIC) or (a == "date" and b == "date")
+
+
+# --- Runtime context type-checking ------------------------------------------
+# Static typecheck() proves the *expression* is well-typed against the field
+# schema. This proves the *values* a service actually supplied match it — so a
+# snapshot with "0" (str) where an int was declared fails loud rather than
+# silently changing a decision. Cheap (dicts are tiny); run on every apply().
+
+_RUNTIME_CHECKS = {
+    "int": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "decimal": lambda v: isinstance(v, (int, float, Decimal)) and not isinstance(v, bool),
+    "str": lambda v: isinstance(v, str),
+    "bool": lambda v: isinstance(v, bool),
+    "uuid": lambda v: isinstance(v, _uuid.UUID),
+    "date": lambda v: isinstance(v, _dt.date),
+    "null": lambda v: v is None,
+}
+
+
+def validate_context(fields: Mapping[str, str], ctx: Mapping[str, object]) -> None:
+    """Raise ExpressionError if any present field's runtime value doesn't match
+    its declared type tag. None is only allowed for the `null` tag — a None
+    where a value is expected is a contract breach (and could silently flip a
+    comparison), not a policy decision."""
+    for name, tag in fields.items():
+        if name not in ctx:
+            continue  # presence is _require_fields' job
+        check = _RUNTIME_CHECKS.get(tag)
+        if check is not None and not check(ctx[name]):
+            raise ExpressionError(
+                f"context field {name!r} expected {tag}, got "
+                f"{type(ctx[name]).__name__}"
+            )

@@ -152,12 +152,59 @@ async def test_summary_endpoint_groups_by_currency(client):
 
 
 @pytest.mark.asyncio
-async def test_clean_batch_can_be_approved(client):
-    headers = await _login(client)  # bootstrap admin holds all roles
+async def test_clean_batch_approved_by_distinct_approver(client, db_engine):
+    headers = await _login(client)  # bootstrap admin uploads
     batch_id = await _upload(client, headers, SAMPLE_CSV)
-    r = await _fire(client, headers, batch_id, "approve")
+    # A *different* user approves — maker-checker is satisfied.
+    await _make_admin(db_engine, "approver@example.com", {"approver"})
+    ap = await _login(client, "approver@example.com")
+    r = await _fire(client, ap, batch_id, "approve")
     assert r.status_code == 200
     assert r.json()["status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_uploader_cannot_approve_own_batch(client):
+    """Separation of duties: the uploader can't approve their own batch, even
+    holding the approver role and with zero errors."""
+    headers = await _login(client)  # bootstrap admin holds approver and uploads
+    batch_id = await _upload(client, headers, SAMPLE_CSV)
+    r = await _fire(client, headers, batch_id, "approve")
+    assert r.status_code == 409
+    # the rendered guard names the maker-checker clause
+    assert "uploaded_by_id" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_then_approve_full_flow(client, db_engine):
+    """The realistic sequence: upload with an error → approval refused (error
+    guard) → resolve the error → uploader still refused (maker-checker) →
+    distinct approver approves."""
+    up = await _login(client)  # bootstrap admin uploads
+    batch_id = await _upload(client, up, ERROR_CSV)  # one validation error
+
+    # 1) blocked by the error guard
+    assert (await _fire(client, up, batch_id, "approve")).status_code == 409
+
+    # 2) resolve (dismiss) the single error → error_count drops to 0
+    errs = (await client.get(f"/api/admin/batches/{batch_id}/errors")).json()
+    assert len(errs) == 1
+    resolved = await client.post(
+        f"/api/admin/batches/{batch_id}/errors/{errs[0]['id']}/resolve",
+        json={"resolution": "dismissed"},
+        headers=up,
+    )
+    assert resolved.status_code == 200
+
+    # 3) uploader still can't approve — now the maker-checker clause binds
+    r = await _fire(client, up, batch_id, "approve")
+    assert r.status_code == 409 and "uploaded_by_id" in r.json()["detail"]
+
+    # 4) a distinct approver can
+    await _make_admin(db_engine, "checker@example.com", {"approver"})
+    ck = await _login(client, "checker@example.com")
+    r = await _fire(client, ck, batch_id, "approve")
+    assert r.status_code == 200 and r.json()["status"] == "approved"
 
 
 @pytest.mark.asyncio
@@ -214,9 +261,15 @@ async def test_lifecycle_endpoint(client):
     assert data["initial"] == "pending"
     approve = next(t for t in data["transitions"] if t["name"] == "approve")
     assert approve["roles"] == ["approver"]
-    # guard is now a structured expression tree + rendered text
-    assert approve["guard_text"] == "error_count = 0"
-    assert approve["guard"]["kind"] == "compare" and approve["guard"]["op"] == "eq"
+    # guard is a structured expression tree + rendered text; maker-checker is
+    # the second clause of the conjunction
+    assert approve["guard_text"] == "(error_count = 0 and actor_id ≠ uploaded_by_id)"
+    assert approve["guard"]["kind"] == "all"
+    assert any(
+        term["kind"] == "compare" and term["op"] == "ne"
+        and {term["left"]["name"], term["right"]["name"]} == {"actor_id", "uploaded_by_id"}
+        for term in approve["guard"]["terms"]
+    )
 
 
 @pytest.mark.asyncio

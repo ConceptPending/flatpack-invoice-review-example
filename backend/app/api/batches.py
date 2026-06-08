@@ -115,9 +115,10 @@ async def transition_batch(
     admin: User = Depends(get_current_admin),
 ):
     """Move the batch through its review lifecycle by firing a named action
-    (`approve`, `reject`). Legality, permission, and the no-open-errors guard
-    are enforced by the state-machine engine; this handler just looks up the
-    batch, supplies the actor's roles, and maps a refusal to an HTTP status.
+    (`approve`, `reject`). Legality, permission, the no-open-errors guard, and
+    separation of duties (the approver can't be the uploader) are enforced by
+    the state-machine engine; this handler looks up the batch, supplies the
+    actor's roles + id, and maps a refusal to an HTTP status.
 
     The two-step recipe walk (audit-log on every transition) is a TODO here —
     see backend/app/models/audit_log.py for the stub.
@@ -127,7 +128,7 @@ async def transition_batch(
         raise HTTPException(status_code=404, detail="Batch not found")
     try:
         batch = await BatchService.transition(
-            db, batch, body.action, roles_for(admin)
+            db, batch, body.action, roles_for(admin), actor_id=admin.id
         )
     except TransitionError as exc:
         raise HTTPException(

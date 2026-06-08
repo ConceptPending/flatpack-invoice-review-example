@@ -6,6 +6,8 @@ always hold — in particular that an approved batch is never one with unresolve
 validation errors.
 """
 
+import uuid
+
 import pytest
 from hypothesis import HealthCheck, settings
 from hypothesis import strategies as st
@@ -13,6 +15,9 @@ from hypothesis.stateful import RuleBasedStateMachine, initialize, invariant, ru
 
 from app.statespec import core, render
 from app.statespec.batch_spec import BATCH_SPEC
+
+_OWNER = uuid.UUID(int=1)   # who uploaded the batch
+_OTHER = uuid.UUID(int=2)   # a different actor
 
 ROLES = sorted({r for t in BATCH_SPEC.transitions for r in t.roles})
 ACTIONS = [t.name for t in BATCH_SPEC.transitions]
@@ -60,16 +65,19 @@ def test_separation_of_duties_in_spec():
 
 
 def test_approve_blocked_by_open_errors():
+    clean = {"error_count": 0, "actor_id": _OTHER, "uploaded_by_id": _OWNER}
     # right state + role, but unresolved errors -> guard refuses
     with pytest.raises(core.GuardRejected):
-        core.apply(
-            BATCH_SPEC, "approve", "pending", ALL_ROLES, {"error_count": 3}
-        )
-    # clean batch approves
-    assert (
-        core.apply(BATCH_SPEC, "approve", "pending", ALL_ROLES, {"error_count": 0})
-        == "approved"
-    )
+        core.apply(BATCH_SPEC, "approve", "pending", ALL_ROLES, {**clean, "error_count": 3})
+    # clean batch, approver != uploader -> approves
+    assert core.apply(BATCH_SPEC, "approve", "pending", ALL_ROLES, clean) == "approved"
+
+
+def test_approve_blocked_when_approver_is_uploader():
+    # maker-checker: same actor as uploader is refused even with zero errors
+    same = {"error_count": 0, "actor_id": _OWNER, "uploaded_by_id": _OWNER}
+    with pytest.raises(core.GuardRejected):
+        core.apply(BATCH_SPEC, "approve", "pending", ALL_ROLES, same)
 
 
 def test_renders():
@@ -83,22 +91,37 @@ class BatchLifecycleMachine(RuleBasedStateMachine):
         super().__init__()
         self.state = BATCH_SPEC.initial
         self.error_count = 0
+        self.uploaded_by_id = _OWNER
+        self.actor_id = _OTHER  # default distinct (re-chosen each fire)
 
     @initialize(errors=st.integers(min_value=0, max_value=5))
     def set_errors(self, errors):
         self.error_count = errors
 
     def _entity(self):
-        return {"status": self.state, "error_count": self.error_count}
+        return {
+            "status": self.state,
+            "error_count": self.error_count,
+            "actor_id": self.actor_id,
+            "uploaded_by_id": self.uploaded_by_id,
+        }
 
-    @rule(action=st.sampled_from(ACTIONS), roles=st.sets(st.sampled_from(ROLES)))
-    def fire(self, action, roles):
+    @rule(
+        action=st.sampled_from(ACTIONS),
+        roles=st.sets(st.sampled_from(ROLES)),
+        same_actor=st.booleans(),
+    )
+    def fire(self, action, roles, same_actor):
         roles = frozenset(roles)
+        # The actor is either the uploader (maker-checker should block approval)
+        # or someone else.
+        self.actor_id = self.uploaded_by_id if same_actor else _OTHER
         t = BATCH_SPEC.transition(action)
+        guard_ok = t.guard is None or (
+            self.error_count == 0 and self.actor_id != self.uploaded_by_id
+        )
         expected_ok = (
-            self.state in t.sources
-            and bool(roles & t.roles)
-            and (t.guard is None or self.error_count == 0)
+            self.state in t.sources and bool(roles & t.roles) and guard_ok
         )
         decision = core.can_fire(BATCH_SPEC, action, self.state, roles, self._entity())
         assert decision.allowed == expected_ok, (
