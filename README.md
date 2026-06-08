@@ -27,9 +27,12 @@ reference/                Preserved Flatpack artefacts
   decisions.md              Answers given to INTERVIEW-REQUIRED items
 ```
 
-Frontend deliberately untouched from the Baseplate template — this is
-a **backend-only** worked example. The Flatpack's HTML remains the
-user-facing artifact for now.
+Frontend is mostly the untouched Baseplate template (the `Item` pages are
+template scaffolding) — this is primarily a **backend** worked example. The one
+purpose-built screen is the read-only **lifecycle viewer + case simulator** at
+`/admin/lifecycle`: it shows the policy in force (version + digest), what's
+available to you on a given batch *and why* (`available-actions`), and the
+append-only event history.
 
 ## What this repo demonstrates
 

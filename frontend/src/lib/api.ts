@@ -1,4 +1,10 @@
 import { getCSRFToken } from "./csrf";
+import type {
+  AvailableActions,
+  Batch,
+  LifecycleEvent,
+  LifecycleSpec,
+} from "./lifecycle-types";
 import type { Item, ItemCreate, ItemUpdate, LoginResponse, User } from "./types";
 
 const BASE = "";
@@ -80,4 +86,29 @@ export async function deleteItem(id: string) {
 // Items (Public)
 export async function getPublicItems() {
   return fetchAPI<Item[]>("/api/public/items");
+}
+
+// Batch lifecycle (viewer)
+export async function getBatches() {
+  return fetchAPI<Batch[]>("/api/admin/batches", { credentials: "include" });
+}
+
+export async function getBatchLifecycle() {
+  return fetchAPI<LifecycleSpec>("/api/admin/batches/lifecycle", {
+    credentials: "include",
+  });
+}
+
+export async function getAvailableActions(batchId: string) {
+  return fetchAPI<AvailableActions>(
+    `/api/admin/batches/${batchId}/available-actions`,
+    { credentials: "include" },
+  );
+}
+
+export async function getLifecycleEvents(batchId: string) {
+  return fetchAPI<LifecycleEvent[]>(
+    `/api/admin/batches/${batchId}/lifecycle-events`,
+    { credentials: "include" },
+  );
 }
