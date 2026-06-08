@@ -8,7 +8,7 @@
 stateDiagram-v2
     %% Batch review lifecycle
     [*] --> pending
-    pending --> approved: approve (approver) [error_count = 0]
+    pending --> approved: approve (approver) [(error_count = 0 and actor_id ≠ uploaded_by_id)]
     pending --> rejected: reject (approver/reviewer)
     approved --> [*]
     rejected --> [*]
@@ -26,7 +26,7 @@ stateDiagram-v2
 
 | Action | From | To | Who may do it | Condition |
 | --- | --- | --- | --- | --- |
-| **approve** — Approve the batch (only when every validation error is resolved). | pending | approved | approver | error_count = 0 |
+| **approve** — Approve the batch — only when clean and by someone other than the uploader. | pending | approved | approver | (error_count = 0 and actor_id ≠ uploaded_by_id) |
 | **reject** — Reject the batch (final). | pending | rejected | approver, reviewer | — |
 
 ## Invariants

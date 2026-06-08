@@ -156,3 +156,19 @@ def test_apply_missing_context_field_raises():
     with pytest.raises(ExpressionError):
         # context lacks "n" (declared field) → contract breach
         apply(spec, "go", "a", frozenset({"r"}), {"status": "a"})
+
+
+# --- runtime context type-checking ------------------------------------------
+
+
+def test_validate_context_type_mismatch():
+    from app.statespec.expr import validate_context
+
+    fields = {"n": "int", "amt": "decimal", "s": "str"}
+    validate_context(fields, {"n": 1, "amt": 1.5, "s": "x"})          # ok (float ok for decimal)
+    with pytest.raises(ExpressionError):
+        validate_context(fields, {"n": "0", "amt": 1.5, "s": "x"})    # "0" is not int
+    with pytest.raises(ExpressionError):
+        validate_context({"b": "bool"}, {"b": 1})                     # int is not bool
+    with pytest.raises(ExpressionError):
+        validate_context({"u": "uuid"}, {"u": None})                  # None not allowed

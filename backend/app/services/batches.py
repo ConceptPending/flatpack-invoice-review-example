@@ -170,16 +170,22 @@ class BatchService:
         batch: ReviewBatch,
         action: str,
         actor_roles: frozenset[str],
+        actor_id: UUID,
     ) -> ReviewBatch:
         """Fire a named lifecycle transition on a batch.
 
         All the decision logic — legal from this state, actor permitted, guard
-        holds (e.g. no unresolved errors) — lives in the generic engine's
-        `apply`. This method only supplies the current state plus the snapshot
-        the guard reads and persists the result. `apply` raises a
-        `TransitionError` subclass on refusal; the route maps those to HTTP.
+        holds (no unresolved errors; the approver is not the uploader) — lives
+        in the generic engine's `apply`. This method only supplies the context
+        snapshot and persists the result. `apply` raises a `TransitionError`
+        subclass on refusal; the route maps those to HTTP.
         """
-        snapshot = {"status": batch.status, "error_count": batch.error_count}
+        snapshot = {
+            "status": batch.status,
+            "error_count": batch.error_count,
+            "actor_id": actor_id,
+            "uploaded_by_id": batch.uploaded_by_id,
+        }
         new_state = apply(BATCH_SPEC, action, batch.status, actor_roles, snapshot)
         batch.status = new_state
         await db.commit()

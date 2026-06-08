@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from app.roles import APPROVER, REVIEWER
 from app.statespec.core import Invariant, StateSpec, Transition
-from app.statespec.expr import any_, field
+from app.statespec.expr import all_, any_, field
 
 __all__ = ["BATCH_SPEC"]
 
@@ -37,8 +37,14 @@ BATCH_SPEC = StateSpec(
     name="batch",
     title="Batch review lifecycle",
     states=_STATES,
-    # Context contract — what a service snapshot must provide.
-    fields={"status": "str", "error_count": "int"},
+    # Context contract — what a service snapshot must provide. actor_id is the
+    # user firing the transition; uploaded_by_id is who uploaded the batch.
+    fields={
+        "status": "str",
+        "error_count": "int",
+        "actor_id": "uuid",
+        "uploaded_by_id": "uuid",
+    },
     initial="pending",
     terminal=frozenset({"approved", "rejected"}),
     transitions=(
@@ -47,8 +53,14 @@ BATCH_SPEC = StateSpec(
             sources=("pending",),
             dest="approved",
             roles=frozenset({APPROVER}),
-            guard=field("error_count").eq(0),
-            label="Approve the batch (only when every validation error is resolved).",
+            # Separation of duties (maker-checker): every validation error
+            # resolved AND the approver is not the uploader.
+            guard=all_(
+                field("error_count").eq(0),
+                field("actor_id").ne(field("uploaded_by_id")),
+            ),
+            label="Approve the batch — only when clean and by someone other "
+            "than the uploader.",
         ),
         Transition(
             name="reject",
