@@ -39,8 +39,12 @@ class ReviewBatch(Base, TimestampMixin):
     clean_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
-    # Bumped on every lifecycle transition; recorded in the LifecycleEvent
-    # (before/after) and the hook for optimistic concurrency (the next layer).
+    # Optimistic-lock version. SQLAlchemy bumps it on every row update and adds
+    # `WHERE version = <loaded>` to UPDATEs (version_id_col below), so two
+    # concurrent transitions on the same version can't both succeed — the loser
+    # raises StaleDataError. Recorded before/after on each LifecycleEvent.
     version: Mapped[int] = mapped_column(
         Integer, default=1, server_default="1", nullable=False
     )
+
+    __mapper_args__ = {"version_id_col": version}

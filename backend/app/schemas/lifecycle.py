@@ -4,6 +4,7 @@
 Shared by every lifecycle slice so the response shape is defined once."""
 
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -50,3 +51,23 @@ class LifecycleSpecResponse(BaseModel):
     fields: list[FieldInfo]
     transitions: list[TransitionInfo]
     invariants: list[InvariantInfo]
+
+
+# --- Case simulator: what's allowed right now, and why ----------------------
+
+
+class AvailableAction(BaseModel):
+    action: str
+    control_id: str
+    to: str
+    allowed: bool
+    reason: str  # "ok", or why the transition is refused
+
+
+class AvailableActionsResponse(BaseModel):
+    batch_id: UUID
+    status: str
+    version: int          # the entity's optimistic-lock version
+    spec_version: int     # the policy version in force
+    spec_digest: str
+    actions: list[AvailableAction]

@@ -20,7 +20,8 @@ from app.schemas.validation_error import (
     ValidationErrorResolutionRequest,
     ValidationErrorResponse,
 )
-from app.services.batches import BatchService
+from app.schemas.lifecycle import AvailableAction, AvailableActionsResponse
+from app.services.batches import BatchService, TransitionConflict
 from app.services.csv_parser import SCHEMA_FIELDS, to_csv
 from app.services.lifecycle_events import LifecycleEventService
 from app.services.suppliers import SupplierService
@@ -29,7 +30,9 @@ from app.statespec import (
     PermissionDenied,
     TransitionError,
     UnknownAction,
+    can_fire,
 )
+from app.statespec.identity import digest
 from app.statespec.batch_spec import BATCH_SPEC
 from app.statespec.render import to_dict
 
@@ -141,11 +144,54 @@ async def transition_batch(
             db, batch, body.action, roles_for(admin), actor_id=admin.id,
             request_id=request.headers.get("X-Request-ID"),
         )
+    except TransitionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except TransitionError as exc:
         raise HTTPException(
             status_code=_ERROR_STATUS.get(type(exc), 409), detail=str(exc)
         ) from exc
     return batch
+
+
+@router.get("/{batch_id}/available-actions", response_model=AvailableActionsResponse)
+async def available_actions(
+    batch_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """The case simulator: for *you*, on this batch right now, which lifecycle
+    actions are available — and the reason each is allowed or refused. Read-only
+    (evaluates the same guard/role logic the transition would, without firing)."""
+    batch = await BatchService.get(db, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    snapshot = {
+        "status": batch.status,
+        "error_count": await BatchService.unresolved_error_count(db, batch.id),
+        "actor_id": admin.id,
+        "uploaded_by_id": batch.uploaded_by_id,
+    }
+    roles = roles_for(admin)
+    actions = []
+    for t in BATCH_SPEC.transitions:
+        d = can_fire(BATCH_SPEC, t.name, batch.status, roles, snapshot)
+        actions.append(
+            AvailableAction(
+                action=t.name,
+                control_id=t.control_id or t.name,
+                to=t.dest,
+                allowed=d.allowed,
+                reason=d.reason,
+            )
+        )
+    return AvailableActionsResponse(
+        batch_id=batch.id,
+        status=batch.status,
+        version=batch.version,
+        spec_version=BATCH_SPEC.version,
+        spec_digest=digest(BATCH_SPEC),
+        actions=actions,
+    )
 
 
 @router.get("/{batch_id}/invoices", response_model=list[InvoiceResponse])
