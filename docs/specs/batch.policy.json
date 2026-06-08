@@ -1,0 +1,146 @@
+{
+  "digest": "0c77a4daa87f6a0f232dff0be6af3a3301b32b518946f74496c4f1966d8640d7",
+  "spec": {
+    "fields": {
+      "actor_id": "uuid",
+      "error_count": "int",
+      "status": "str",
+      "uploaded_by_id": "uuid"
+    },
+    "initial": "pending",
+    "invariants": [
+      {
+        "condition": {
+          "kind": "any",
+          "terms": [
+            {
+              "kind": "compare",
+              "left": {
+                "kind": "field",
+                "name": "status"
+              },
+              "op": "ne",
+              "right": {
+                "kind": "literal",
+                "type": "str",
+                "value": "approved"
+              }
+            },
+            {
+              "kind": "compare",
+              "left": {
+                "kind": "field",
+                "name": "error_count"
+              },
+              "op": "eq",
+              "right": {
+                "kind": "literal",
+                "type": "int",
+                "value": 0
+              }
+            }
+          ]
+        },
+        "id": "approved_implies_clean",
+        "label": "An approved batch has no unresolved validation errors.",
+        "name": "approved_implies_clean",
+        "opaque": {}
+      },
+      {
+        "condition": {
+          "kind": "compare",
+          "left": {
+            "kind": "field",
+            "name": "status"
+          },
+          "op": "in",
+          "right": {
+            "kind": "literal",
+            "type": "list",
+            "value": [
+              "pending",
+              "approved",
+              "rejected"
+            ]
+          }
+        },
+        "id": "status_declared",
+        "label": "The status is always one of the declared states.",
+        "name": "status_declared",
+        "opaque": {}
+      }
+    ],
+    "name": "batch",
+    "states": {
+      "approved": "Cleared for downstream processing.",
+      "pending": "Uploaded and awaiting review.",
+      "rejected": "Declined \u2014 will not be processed."
+    },
+    "terminal": [
+      "approved",
+      "rejected"
+    ],
+    "transitions": [
+      {
+        "from": [
+          "pending"
+        ],
+        "guard": {
+          "kind": "all",
+          "terms": [
+            {
+              "kind": "compare",
+              "left": {
+                "kind": "field",
+                "name": "error_count"
+              },
+              "op": "eq",
+              "right": {
+                "kind": "literal",
+                "type": "int",
+                "value": 0
+              }
+            },
+            {
+              "kind": "compare",
+              "left": {
+                "kind": "field",
+                "name": "actor_id"
+              },
+              "op": "ne",
+              "right": {
+                "kind": "field",
+                "name": "uploaded_by_id"
+              }
+            }
+          ]
+        },
+        "id": "approve",
+        "label": "Approve the batch \u2014 only when clean and by someone other than the uploader.",
+        "name": "approve",
+        "opaque": {},
+        "roles": [
+          "approver"
+        ],
+        "to": "approved"
+      },
+      {
+        "from": [
+          "pending"
+        ],
+        "guard": null,
+        "id": "reject",
+        "label": "Reject the batch (final).",
+        "name": "reject",
+        "opaque": {},
+        "roles": [
+          "approver",
+          "reviewer"
+        ],
+        "to": "rejected"
+      }
+    ],
+    "version": 1
+  },
+  "version": 1
+}
