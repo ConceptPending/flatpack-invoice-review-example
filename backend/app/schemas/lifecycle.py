@@ -42,6 +42,8 @@ class InvariantInfo(BaseModel):
 class LifecycleSpecResponse(BaseModel):
     name: str
     title: str
+    version: int
+    digest: str
     initial: str
     terminal: list[str]
     states: list[StateInfo]

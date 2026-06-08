@@ -10,6 +10,7 @@ layperson-facing viewer (a separate tool/repo).
 from __future__ import annotations
 
 from app.statespec import expr as _expr
+from app.statespec import identity as _identity
 from app.statespec.core import StateSpec
 
 
@@ -50,6 +51,9 @@ def to_dict(spec: StateSpec) -> dict:
     return {
         "name": spec.name,
         "title": spec.title,
+        # Policy identity — which exact policy this is.
+        "version": spec.version,
+        "digest": _identity.digest(spec),
         "initial": spec.initial,
         "terminal": sorted(spec.terminal),
         "states": [{"id": s, "description": d} for s, d in spec.states.items()],

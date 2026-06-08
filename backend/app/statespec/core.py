@@ -38,6 +38,9 @@ class Transition:
     guard: object | None = None  # an expr condition (Compare/All/Any/Not/Opaque)
     # Plain-English description for the human-readable render.
     label: str = ""
+    # Stable, namespaced control id for audit/compliance references (e.g.
+    # "BATCH-APPROVE"). Defaults to the action name; survives a label reword.
+    control_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +48,7 @@ class Invariant:
     name: str
     condition: object  # an expr condition; must hold in every reachable state
     label: str = ""
+    control_id: str | None = None  # stable control id (defaults to name)
 
 
 @dataclass(frozen=True)
@@ -63,6 +67,9 @@ class StateSpec:
     terminal: frozenset[str]
     transitions: tuple[Transition, ...]
     invariants: tuple[Invariant, ...] = ()
+    # Author-asserted policy version. Bump when the canonical digest changes;
+    # the (version, digest) pair is the policy's identity. See statespec.identity.
+    version: int = 1
 
     def transition(self, action: str) -> Transition | None:
         for t in self.transitions:
