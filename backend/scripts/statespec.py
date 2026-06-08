@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("DEBUG", "true")
 
+from app.roles import ALL_ROLES  # noqa: E402
 from app.statespec import core, render  # noqa: E402
 from app.statespec.batch_spec import BATCH_SPEC  # noqa: E402
 
@@ -31,7 +32,9 @@ SPECS = [BATCH_SPEC]
 def cmd_check() -> int:
     failed = False
     for spec in SPECS:
-        problems = core.validate(spec)
+        # Validate roles against the human/system catalogue so a misspelled
+        # role (un-grantable, thus un-fireable) is caught here, not at runtime.
+        problems = core.validate(spec, known_roles=ALL_ROLES)
         if problems:
             failed = True
             print(f"MISS  {spec.name}: {len(problems)} problem(s)")

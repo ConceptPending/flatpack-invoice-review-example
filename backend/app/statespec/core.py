@@ -219,13 +219,21 @@ def _can_reach_terminal(spec: StateSpec, start: str) -> bool:
     return False
 
 
-def validate(spec: StateSpec) -> list[str]:
+def validate(
+    spec: StateSpec, known_roles: frozenset[str] | None = None
+) -> list[str]:
     """Return a list of human-readable problems. Empty list == well-formed.
 
     A well-formed spec has: a declared initial state; declared, terminal-only
     sink states; every state reachable from initial; every non-terminal state
-    able to reach some terminal (no traps); no transition referencing an
-    undeclared state, an empty role set, or a missing guard.
+    able to reach some terminal (no traps); unique transition + invariant
+    names; and no transition referencing an undeclared state, an empty role
+    set, or a missing guard.
+
+    If `known_roles` is supplied (the application's role catalogue), every
+    transition's roles must be drawn from it — this catches a misspelled role
+    (e.g. `aprover`) that no user could ever hold, which would otherwise make
+    the transition silently un-fireable.
     """
     problems: list[str] = []
     states = set(spec.states)
@@ -236,14 +244,16 @@ def validate(spec: StateSpec) -> list[str]:
         if term not in states:
             problems.append(f"terminal state {term!r} is not declared")
 
+    seen_actions: set[str] = set()
     for t in spec.transitions:
+        if t.name in seen_actions:
+            problems.append(f"duplicate transition name {t.name!r}")
+        seen_actions.add(t.name)
         for s in t.sources:
             if s not in states:
                 problems.append(f"transition {t.name!r} has undeclared source {s!r}")
         if t.dest not in states:
             problems.append(f"transition {t.name!r} has undeclared dest {t.dest!r}")
-        if t.dest in spec.terminal and False:
-            pass  # transitions *into* terminals are fine
         if any(src in spec.terminal for src in t.sources):
             problems.append(
                 f"transition {t.name!r} leaves terminal state(s) "
@@ -251,10 +261,21 @@ def validate(spec: StateSpec) -> list[str]:
             )
         if not t.roles:
             problems.append(f"transition {t.name!r} has no permitted roles (dead edge)")
+        if known_roles is not None and (t.roles - known_roles):
+            problems.append(
+                f"transition {t.name!r} references role(s) not in the catalogue: "
+                f"{sorted(t.roles - known_roles)}"
+            )
         if t.guard is not None and t.guard not in spec.guards:
             problems.append(
                 f"transition {t.name!r} references unknown guard {t.guard!r}"
             )
+
+    seen_invariants: set[str] = set()
+    for inv in spec.invariants:
+        if inv.name in seen_invariants:
+            problems.append(f"duplicate invariant name {inv.name!r}")
+        seen_invariants.add(inv.name)
 
     reachable = reachable_states(spec)
     for s in states - reachable:
