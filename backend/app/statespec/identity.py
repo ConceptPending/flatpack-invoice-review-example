@@ -98,9 +98,23 @@ def digest(spec: StateSpec) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
+# Version of the policy-artifact FORMAT itself (the .policy.json envelope), so
+# a consumer (e.g. an external control plane) can evolve with it. Bump only when
+# the artifact shape changes — independent of any individual policy's version.
+POLICY_ARTIFACT_SCHEMA = 1
+
+
 def policy_record(spec: StateSpec) -> dict:
-    """The committed baseline: version + digest + canonical spec."""
-    return {"version": spec.version, "digest": digest(spec), "spec": canonical(spec)}
+    """The committed policy artifact: a versioned envelope around the canonical
+    spec. This is the stable contract an external consumer reads (see
+    docs/design/policy-artifact-contract.md). It is a *committed* baseline, not
+    an *approved* one — approval lives in the control plane, tied to a digest."""
+    return {
+        "schema_version": POLICY_ARTIFACT_SCHEMA,
+        "spec_version": spec.version,
+        "digest": digest(spec),
+        "spec": canonical(spec),
+    }
 
 
 # --- Semantic diff ----------------------------------------------------------

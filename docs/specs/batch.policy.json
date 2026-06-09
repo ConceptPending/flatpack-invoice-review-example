@@ -1,5 +1,6 @@
 {
   "digest": "0c77a4daa87f6a0f232dff0be6af3a3301b32b518946f74496c4f1966d8640d7",
+  "schema_version": 1,
   "spec": {
     "fields": {
       "actor_id": "uuid",
@@ -142,5 +143,5 @@
     ],
     "version": 1
   },
-  "version": 1
+  "spec_version": 1
 }
