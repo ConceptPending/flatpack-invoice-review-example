@@ -62,6 +62,58 @@ append-only event history.
    on disk and runnable — open it in a browser, click "Load sample
    data", and you have side-by-side parity with this Baseplate app.
 
+## Lifecycle governance (the StateSpec kernel)
+
+The `ReviewBatch` lifecycle is the complete reference for Baseplate's
+[`lifecycle-state-machine`](https://github.com/ConceptPending/baseplate/blob/main/docs/recipes/lifecycle-state-machine.md)
+recipe — the chain *policy → enforcement → tested behaviour → evidence →
+visibility*:
+
+```mermaid
+flowchart LR
+  spec["batch_spec.py<br/>(declarative policy:<br/>states, guards, invariants)"]
+  engine["statespec engine<br/>fire(): guard + invariants"]
+  svc["BatchService.transition<br/>(atomic + optimistic lock)"]
+  ev["LifecycleEvent<br/>(append-only evidence)"]
+  id["identity: version + digest"]
+  view["/admin/lifecycle<br/>viewer + simulator"]
+  gate["control plane<br/>(approval + prod gate)"]:::ext
+
+  spec --> engine --> svc --> ev
+  spec --> id
+  ev --> view
+  id --> view
+  id -. policy.json digest .-> gate
+  classDef ext stroke-dasharray:5 5,opacity:0.7;
+```
+
+This example can now answer, for any batch:
+
+- **What rule is in force?** — `GET /api/admin/batches/lifecycle` (states,
+  transitions, guards, invariants), plus its **version + digest**.
+- **What actions are available to me, and why?** — `…/available-actions`
+  (each action allowed/refused + the reason).
+- **Who performed a transition, and under which exact policy?** —
+  `…/lifecycle-events`: actor, roles **snapshotted at the time**, prior→new
+  state, the spec version + digest, and each control's result + evaluated
+  inputs.
+- **Could stale data or a concurrent transition have invalidated it?** — the
+  guard counts live unresolved-error rows (not a cache), and an optimistic-lock
+  `version` makes two transitions on the same version impossible.
+
+**See it:** `make dev`, then open `/admin/lifecycle`, pick a batch, and you get
+the policy, the available-actions simulator, and the event history. (Backend
+only: upload a CSV → `POST …/transition {"action":"approve"}` as a *different*
+user than the uploader → `GET …/lifecycle-events`.)
+
+**Where it stops:** this repo proves the policy *works, is enforced, and is
+recorded*. It does **not** approve policies for production — the `.policy.json`
+here is a *committed* baseline, not an *approved* one. The approval-authority /
+production-gate layer is designed as a **separate control plane** (see
+baseplate's [`docs/design/approval-authority.md`](https://github.com/ConceptPending/baseplate/blob/example/state-machine/docs/design/approval-authority.md));
+keeping it out of the application is deliberate — the resulting app stays
+ordinary, standalone software.
+
 ## The promotion journey
 
 Following [`docs/promoting-a-flatpack.md`](https://github.com/ConceptPending/baseplate/blob/main/docs/promoting-a-flatpack.md)

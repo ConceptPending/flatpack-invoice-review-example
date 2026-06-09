@@ -89,11 +89,11 @@ def cmd_diff(name: str) -> int:
     if old["digest"] == new["digest"]:
         print(f"{name}: no policy change (digest {new['digest'][:12]}…)")
         return 0
-    print(f"{name}: POLICY CHANGED  v{old['version']} ({old['digest'][:12]}…) "
-          f"→ v{new['version']} ({new['digest'][:12]}…)")
+    print(f"{name}: POLICY CHANGED  v{old['spec_version']} ({old['digest'][:12]}…) "
+          f"→ v{new['spec_version']} ({new['digest'][:12]}…)")
     for line in identity.diff(old["spec"], new["spec"]):
         print(f"    {line}")
-    if old["version"] == new["version"]:
+    if old["spec_version"] == new["spec_version"]:
         print("    ⚠ digest changed but version did not — bump StateSpec.version")
     return 0
 
